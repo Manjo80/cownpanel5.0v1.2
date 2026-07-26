@@ -15,6 +15,7 @@
 #include <Wire.h>
 #include <esp_system.h>
 #include "esp_private/periph_ctrl.h"
+#include "sdkconfig.h"
 #include "pins.h"
 #include "LGFX_Driver.h"
 #include "touch_probe.h"
@@ -72,6 +73,24 @@ void setup() {
   // zeigt z. B. POWERON_RESET (Stromlos) vs. SW_CPU_RESET/USB_UART_CHIP_RESET
   // (Reset-Knopf/Serial-Monitor-Autoreset).
   Serial.printf("Reset-Grund: %d\n", (int)esp_reset_reason());
+
+  // PSRAM-Takt, mit dem der GERADE INSTALLIERTE Core kompiliert wurde.
+  // Elecrows eigenes PlatformIO-Beispiel fuer dieses Board setzt
+  // -DCONFIG_SPIRAM_SPEED_120M=1 -- der ueber die normale Arduino-
+  // Boardverwaltung installierte Standard-Core hat dieses Flag evtl. NICHT.
+  // Steht hier "80 MHz" oder "40 MHz" statt "120 MHz", laeuft das PSRAM
+  // mit einem anderen Takt, als fuer den auf diesem Board verbauten Chip
+  // vorgesehen -- ein sehr wahrscheinlicher Kandidat fuer sporadische
+  // Bildfehler/schwarzes Display.
+#if defined(CONFIG_SPIRAM_SPEED_120M)
+  Serial.println("PSRAM-Takt (kompiliert): 120 MHz");
+#elif defined(CONFIG_SPIRAM_SPEED_80M)
+  Serial.println("PSRAM-Takt (kompiliert): 80 MHz  <-- evtl. Diskrepanz zur Hardware!");
+#elif defined(CONFIG_SPIRAM_SPEED_40M)
+  Serial.println("PSRAM-Takt (kompiliert): 40 MHz  <-- evtl. Diskrepanz zur Hardware!");
+#else
+  Serial.println("PSRAM-Takt (kompiliert): unbekannt (kein CONFIG_SPIRAM_SPEED_* Makro gesetzt)");
+#endif
 
   // PSRAM-Diagnose: wenn dieser Wert bei 0 oder sehr klein liegt, ist
   // "OPI PSRAM" im Werkzeuge-Menue NICHT aktiv -- der 768-KB-Framebuffer
