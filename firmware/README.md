@@ -85,13 +85,17 @@ Ohne diesen Patch schlagen Antworten mit mehr als 64 Byte fehl:
 
 ### GT911-Adress-Fix (bereits in `touch_probe.h` umgesetzt)
 
-Der GT911 wählt seine I2C-Adresse (0x5D oder 0x14) beim Power-On anhand des
-Pegels an seinem INT-Pin. Da dieser Pin auf diesem Board nicht angesteuert
-wird, floatet der Pegel und die Adresse kann zwischen Boots wechseln — das
-äußert sich als "Touch geht mal, mal nicht" bzw. im schlimmsten Fall als
-Aussetzer beim Display-Bringup. Jeder Stage-Sketch sondiert deshalb beide
-Adressen zur Laufzeit (`probeGT911Address()` in `touch_probe.h`), **bevor**
-`lcd.init()` aufgerufen wird, statt eine Adresse fest zu verdrahten.
+Der GT911 wählt seine I2C-Adresse (0x5D oder 0x14) beim eigenen Power-On
+anhand des Pegels an seinem INT-Pin (hier GPIO1). Elecrows Werks-Testcode
+(`factory_sourcecode`) steuert diesen Pin AKTIV an: GPIO1 wird als eine der
+allerersten Aktionen in `setup()` für 120 ms auf LOW gezogen und danach
+wieder auf Eingang gestellt ("GT911 上电时序 ---> 选用 0x5D" — GT911-Power-On-
+Sequenz, wählt 0x5D). Das erzwingt die Adresse deterministisch, statt sie
+dem Zufall zu überlassen. Jeder Stage-Sketch ruft dafür `gt911PowerOnSequence()`
+(in `touch_probe.h`) als erste Zeile in `setup()` auf — noch vor `Serial.begin()`,
+da der GT911 seine Power-On-Reset-Sequenz parallel zum ESP32-Boot durchläuft.
+`probeGT911Address()` sondiert zusätzlich zur Laufzeit beide Adressen als
+Sicherheitsnetz, falls die Sequenz aus irgendeinem Grund doch nicht greift.
 
 ## 5. Backlight & Buzzer (STC8H1K28, Adresse 0x30)
 

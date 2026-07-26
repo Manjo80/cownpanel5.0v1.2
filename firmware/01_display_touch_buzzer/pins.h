@@ -32,22 +32,27 @@
 
 #define LCD_WIDTH   800
 #define LCD_HEIGHT  480
-// Offiziell 21 MHz, reduziert auf 16 MHz gegen seitliches Flackern (siehe
-// README.md Abschnitt 4). Test mit 8 MHz zeigte KEINE Verbesserung der
-// Button-Streifen, sondern staerkere Instabilitaet (unsichtbare Buttons,
-// nach Stromlos-Neustart sogar schwarzer Hintergrund) -- daher zurueck auf
-// 16 MHz, den bisher stabilsten getesteten Wert. "Langsamer" ist hier
-// nicht automatisch sicherer.
-#define LCD_FREQ_WRITE 16000000
+// Elecrows eigener Werks-Testcode (factory_sourcecode) nutzt 21 MHz, NICHT
+// die von uns zwischenzeitlich probierten 16/8 MHz (die keine Verbesserung
+// brachten, 8 MHz sogar staerkere Instabilitaet). Zurueck auf den offiziell
+// validierten Wert.
+#define LCD_FREQ_WRITE 21000000
 
 // ---- I2C-Bus (gemeinsam fuer Touch, RTC, Backlight/Buzzer) -----------------
 #define PIN_I2C_SDA  15
 #define PIN_I2C_SCL  16
 #define I2C_FREQ_HZ  400000
 
-// GT911 Touch-Controller: Adresse ist beim Power-On vom Pegel an einem nicht
-// angesteuerten Interrupt-Pin abhaengig und daher pro Boot 0x5D ODER 0x14.
-// Immer zur Laufzeit sondieren (siehe touch_probe.h), nicht fest verdrahten!
+// GT911 Touch-Controller: Adresse ist beim Power-On vom Pegel an seinem
+// INT-Pin (hier GPIO1) abhaengig. Elecrows Werks-Testcode steuert GPIO1
+// AKTIV an (LOW fuer 120ms direkt beim Boot, dann wieder INPUT), um die
+// Adresse deterministisch auf 0x5D zu erzwingen ("GT911 上电时序 --->
+// 选用 0x5D" -- GT911-Power-On-Sequenz, waehlt 0x5D). Siehe gt911_power_on()
+// in touch_probe.h -- MUSS als eine der ersten Aktionen in setup() laufen,
+// bevor der GT911 seine eigene Power-On-Reset-Sequenz abschliesst.
+// probeGT911Address() bleibt als Sicherheitsnetz erhalten, falls die
+// Sequenz aus irgendeinem Grund doch nicht greift.
+#define PIN_GT911_INT 1
 #define GT911_ADDR_PRIMARY   0x5D
 #define GT911_ADDR_SECONDARY 0x14
 
