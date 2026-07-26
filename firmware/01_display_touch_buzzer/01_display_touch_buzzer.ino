@@ -76,6 +76,16 @@ void setup() {
     Serial.println("WARNUNG: Kein PSRAM erkannt! Werkzeuge -> PSRAM: OPI PSRAM pruefen.");
   }
 
+  // Test auf Timing-Ursache: bei Stromlos-Start haben Spannungsregler/Quarz/
+  // RGB-Bus-Taktdomaene mehrere zehn ms Anlaufzeit, bevor der Bootloader
+  // ueberhaupt startet. Bei einem reinen Reset (Knopf/USB-Auto-Reset) fehlt
+  // diese Anlaufzeit. Dieser Delay simuliert sie nachtraeglich, direkt vor
+  // der RGB-Panel-Initialisierung -- falls das den Unterschied macht, ist
+  // es ein Timing-Problem und kein hardwareseitig blockiertes PSRAM.
+  const uint32_t STARTUP_SETTLE_MS = 300;
+  Serial.printf("Warte %lums vor Panel-Init (Timing-Test) ...\n", (unsigned long)STARTUP_SETTLE_MS);
+  delay(STARTUP_SETTLE_MS);
+
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
   delay(50);
 
