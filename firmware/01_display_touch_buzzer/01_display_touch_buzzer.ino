@@ -66,6 +66,16 @@ void setup() {
   delay(200);
   Serial.println("Stage 1: Display + Touch + Buzzer -- boot");
 
+  // PSRAM-Diagnose: wenn dieser Wert bei 0 oder sehr klein liegt, ist
+  // "OPI PSRAM" im Werkzeuge-Menue NICHT aktiv -- der 768-KB-Framebuffer
+  // passt dann nicht ins SRAM und das Panel bleibt schwarz. Springt bei
+  // Core-Wechseln haeufig auf Default zurueck, siehe firmware/README.md.
+  Serial.printf("PSRAM gesamt: %u Bytes, frei: %u Bytes\n",
+                (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
+  if (ESP.getPsramSize() == 0) {
+    Serial.println("WARNUNG: Kein PSRAM erkannt! Werkzeuge -> PSRAM: OPI PSRAM pruefen.");
+  }
+
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
   delay(50);
 
@@ -73,8 +83,22 @@ void setup() {
   Serial.printf("GT911 gefunden auf Adresse 0x%02X\n", gtAddr);
   lcd.setTouchAddr(gtAddr);
 
-  lcd.init();
+  Serial.println("lcd.init() ...");
+  bool initOk = lcd.init();
+  Serial.printf("lcd.init() -> %s\n", initOk ? "OK" : "FEHLGESCHLAGEN");
+  if (!initOk) {
+    // Bring-up der RGB-Bus/Panel-Sequenz ist auf ESP32-S3 bekanntermassen
+    // manchmal beim allerersten Versuch nach Kaltstart instabil -- ein
+    // zweiter Versuch nach kurzer Pause behebt das in vielen Faellen.
+    Serial.println("Zweiter Versuch nach 300ms Pause ...");
+    delay(300);
+    initOk = lcd.init();
+    Serial.printf("lcd.init() (2. Versuch) -> %s\n", initOk ? "OK" : "FEHLGESCHLAGEN");
+  }
+
+  Serial.println("lcd.initDMA() ...");
   lcd.initDMA();
+  Serial.println("lcd.startWrite() ...");
   lcd.startWrite();
   lcd.setRotation(0);
 
@@ -86,7 +110,17 @@ void setup() {
   Serial.println("Setup fertig.");
 }
 
+uint32_t lastHeartbeatMs = 0;
+
 void loop() {
+  // Heartbeat: laeuft auch dann weiter, wenn das Panel schwarz bleibt --
+  // zeigt, ob der Kern haengt oder nur die RGB-Ausgabe fehlt.
+  if (millis() - lastHeartbeatMs >= 5000) {
+    lastHeartbeatMs = millis();
+    Serial.printf("Heartbeat: laeuft seit %lus, freier Heap %u Bytes\n",
+                  (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap());
+  }
+
   int32_t x, y;
   if (lcd.getTouch(&x, &y)) {
     Serial.printf("Touch: x=%d y=%d\n", x, y);
