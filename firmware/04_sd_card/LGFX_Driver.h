@@ -79,8 +79,8 @@ public:
       cfg.x_max = LCD_WIDTH;
       cfg.y_min = 0;
       cfg.y_max = LCD_HEIGHT;
-      cfg.pin_int = -1;      // Interrupt-Pin nicht angesteuert
-      cfg.bus_shared = true; // Touch teilt den I2C-Bus mit RTC/Backlight-IC
+      cfg.pin_int = -1;       // Interrupt-Pin nicht von LovyanGFX angesteuert (siehe gt911_power_on())
+      cfg.bus_shared = false; // 1:1 wie Elecrows Werks-Testcode -- vorher faelschlich auf true
       cfg.offset_rotation = 0;
       cfg.i2c_port = I2C_NUM_0;
       cfg.pin_sda = PIN_I2C_SDA;

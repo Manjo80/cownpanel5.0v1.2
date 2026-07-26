@@ -117,6 +117,10 @@ void syncFromNtp() {
 #endif
 
 void setup() {
+  // Muss vor allem anderen laufen (siehe touch_probe.h) -- zwingt den GT911
+  // deterministisch auf Adresse 0x5D, statt den Pegel floaten zu lassen.
+  gt911PowerOnSequence();
+
   Serial.begin(115200);
   delay(200);
   Serial.println("Stage 3: RTC (PCF8563) -- boot");
