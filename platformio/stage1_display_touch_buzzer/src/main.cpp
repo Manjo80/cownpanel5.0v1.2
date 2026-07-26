@@ -49,6 +49,14 @@ const uint16_t bgColors[] = { TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_BLACK };
 uint8_t bgIndex = 0;
 
 void drawButton(const Button &b, uint16_t fill) {
+  // WICHTIG: pushSprite() stoesst die Uebertragung per DMA an und kehrt
+  // sofort zurueck, OHNE auf deren Abschluss zu warten. btnSprite ist ein
+  // einziger, wiederverwendeter Puffer fuer alle drei Buttons -- ohne
+  // waitDMA() wuerde der naechste fillSprite()-Aufruf denselben Speicher
+  // ueberschreiben, waehrend die vorherige Uebertragung noch laeuft, und
+  // dabei zerstoerte/vermischte Pixel auf dem Schirm hinterlassen
+  // (genau das beobachtete Streifen-/Rauschmuster auf den Buttons).
+  lcd.waitDMA();
   btnSprite.fillSprite(bgColors[bgIndex]);
   btnSprite.fillRoundRect(0, 0, b.w, b.h, 8, fill);
   btnSprite.drawRoundRect(0, 0, b.w, b.h, 8, TFT_WHITE);
@@ -57,6 +65,7 @@ void drawButton(const Button &b, uint16_t fill) {
   btnSprite.setTextDatum(lgfx::middle_center);
   btnSprite.drawString(b.label, b.w / 2, b.h / 2);
   btnSprite.pushSprite(b.x, b.y);
+  lcd.waitDMA();
 }
 
 bool inside(const Button &b, int32_t x, int32_t y) {
