@@ -167,6 +167,14 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   GT911-Adresswechsel, siehe Abschnitt 4 — durch `probeGT911Address()`
   bereits behoben; falls trotzdem instabil, echten I2C-Pullup/Verkabelung
   prüfen.
+- **Touch funktioniert nach Reset-Knopf, aber nicht nach echtem
+  Stromlos-Neustart:** Der GT911-Chip selbst braucht nach einer echten
+  Kaltstart-Stromversorgung noch Zeit für sein eigenes Power-On-Booting,
+  bevor er auf dem I2C-Bus antwortet — beim Reset-Knopf läuft der Chip
+  bereits, daher fällt das dort nicht auf. Stage 1 wartet deshalb
+  zusätzlich zur 120ms-Adress-Auswahl-Sequenz (`gt911PowerOnSequence()`)
+  weitere 600 ms, bevor der Touch-Chip angesprochen wird. Falls das auf
+  einzelnen Boards nicht reicht, Wert in `setup()` erhöhen.
 - **ESP-NOW-Callback kompiliert nicht:** Callback-Signaturen sind
   Core-Versions-abhängig. Dieser Code ist auf Core 3.x geschrieben
   (`esp_now_recv_info_t*`); auf Core 2.x muss der Recv-Callback stattdessen
