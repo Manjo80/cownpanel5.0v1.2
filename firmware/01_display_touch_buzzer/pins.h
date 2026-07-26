@@ -32,9 +32,12 @@
 
 #define LCD_WIDTH   800
 #define LCD_HEIGHT  480
-// Offiziell 21 MHz; auf diesem Board reduziert auf 16 MHz gegen seitliches
-// Flackern (siehe README.md Abschnitt 4). Bei Bedarf zurueck auf 21000000 testen.
-#define LCD_FREQ_WRITE 16000000
+// Offiziell 21 MHz. Erst auf 16 MHz gesenkt (seitliches Flackern, siehe
+// README.md Abschnitt 4), dann auf 8 MHz -- Verdacht auf Signalintegritaets-
+// Grenze bei dichten/schnell wechselnden Pixeln (Button-Text/-Rahmen zeigten
+// bei 16 MHz weiterhin Streifen, waehrend grossflaechige Inhalte sauber
+// blieben). Testweise anpassen und beobachten, ob die Streifen verschwinden.
+#define LCD_FREQ_WRITE 8000000
 
 // ---- I2C-Bus (gemeinsam fuer Touch, RTC, Backlight/Buzzer) -----------------
 #define PIN_I2C_SDA  15
