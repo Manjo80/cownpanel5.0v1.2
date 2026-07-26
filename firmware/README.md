@@ -6,11 +6,30 @@ in der sie üblicherweise ans Laufen gebracht werden:
 
 | Ordner | Testet | Status |
 |---|---|---|
-| `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | fertig |
-| `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | fertig |
-| `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync | fertig |
-| `04_sd_card/` | SD-/TF-Karte über SPI | fertig |
-| `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) | fertig |
+| `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | RGB-Ausgabe umgebaut auf esp_lcd_panel_rgb (siehe unten), wird getestet |
+| `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | fertig (nutzt noch LovyanGFX Bus_RGB) |
+| `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync | fertig (nutzt noch LovyanGFX Bus_RGB) |
+| `04_sd_card/` | SD-/TF-Karte über SPI | fertig (nutzt noch LovyanGFX Bus_RGB) |
+| `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) | fertig (nutzt noch LovyanGFX Bus_RGB) |
+
+### Wichtige Architekturänderung in Stage 1 (esp_lcd_panel_rgb statt LovyanGFX Bus_RGB)
+
+Hartnäckige Bildstreifen/-fehler auf Buttons ließen sich mit reinen
+LovyanGFX-Anpassungen (Sprite-Puffer, `waitDMA()`, PSRAM-Takt, Pixeltakt)
+nicht beheben. Wahrscheinliche Ursache: LovyanGFX's `Bus_RGB`-Treiber hat
+keinen "Bounce Buffer" — bei ESP32-S3-RGB-Panels mit PSRAM-Framebuffer ist
+das ein bekanntes Problem, da CPU-Schreibzugriffe (Zeichnen) mit der
+kontinuierlichen GDMA-Bildausgabe um dieselbe PSRAM-Bandbreite konkurrieren.
+Espressifs eigener ESP-IDF-Treiber (`esp_lcd_panel_rgb`) hat dafür einen
+Bounce Buffer (kleiner SRAM-Zwischenpuffer) eingebaut.
+
+`01_display_touch_buzzer` nutzt deshalb jetzt `esp_lcd_panel_rgb` direkt für
+die Hardware-Ausgabe (`rgb_panel.h`) und GT911-Touch eigenständig ohne
+LGFX-Device (`touch_standalone.h`). LovyanGFX wird nur noch für die
+Zeichen-API genutzt: `LGFX_Sprite canvas` zeigt per `setBuffer()` direkt auf
+den von `esp_lcd_panel_rgb` bereitgestellten Framebuffer. Die Stages 2-5
+nutzen noch die alte LovyanGFX-Bus_RGB-Variante — werden erst umgestellt,
+sobald sich der Ansatz in Stage 1 bewährt hat.
 
 Jeder Ordner ist ein vollständiger, eigenständiger Arduino-Sketch (Ordnername
 = `.ino`-Dateiname, wie von der Arduino-IDE verlangt) und enthält seine
