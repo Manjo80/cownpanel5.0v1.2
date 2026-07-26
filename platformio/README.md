@@ -34,10 +34,21 @@ automatisch heruntergeladen — kein manuelles Kopieren in einen
 
 | Datei/Ordner | Inhalt |
 |---|---|
-| `stage1_display_touch_buzzer/platformio.ini` | Elecrows offizielle Konfiguration (Platform, Board, `-DCONFIG_SPIRAM_SPEED_120M=1`, LovyanGFX-Version) |
+| `stage1_display_touch_buzzer/platformio.ini` | Elecrows offizielle Konfiguration (Platform, Board, LovyanGFX-Version) |
+| `stage1_display_touch_buzzer/boards/ESP32-S3-WROOM-1-N16R8.json` | **Notwendig** — eigene Board-Definition, ohne die PlatformIO die Board-ID nicht kennt ("UnknownBoard") |
+| `stage1_display_touch_buzzer/sdkconfig.defaults.esp32s3` | **Die eigentlich wichtige Datei** — setzt `CONFIG_SPIRAM_SPEED_120M` als echte ESP-IDF-Kconfig-Option (nicht nur als Compiler-Define), dazu Cache-Line-Groesse und Anti-Tearing (`CONFIG_EXAMPLE_LVGL_PORT_AVOID_TEAR_ENABLE`) |
+| `stage1_display_touch_buzzer/sdkconfig.defaults` | Fast leer (Elecrows Original enthaelt hier nur LVGL-Einstellungen, die Stage 1 nicht braucht); muss aber als Datei existieren |
 | `stage1_display_touch_buzzer/partitions.csv` | 1:1 aus Elecrows offiziellem PlatformIO-Beispiel übernommen |
 | `stage1_display_touch_buzzer/src/main.cpp` | Portierung von `firmware/01_display_touch_buzzer/01_display_touch_buzzer.ino`, inhaltlich identisch |
 | `stage1_display_touch_buzzer/include/*.h` | Kopien der Header aus `firmware/01_display_touch_buzzer/` |
+
+**Wichtig zum Verstaendnis:** Der `-DCONFIG_SPIRAM_SPEED_120M=1` in `build_flags`
+(platformio.ini) allein haette NICHT gereicht — das ist nur ein
+Compiler-Define, das den Diagnose-Print im Code beeinflusst, aber nicht die
+tatsaechliche Hardware-Taktung des PSRAM-Treibers aendert. Die echte
+Aenderung passiert ueber `sdkconfig.defaults.esp32s3`, das PlatformIO beim
+Bauen automatisch erkennt und in die zugrundeliegende ESP-IDF-Konfiguration
+einspeist (Arduino laeuft unter diesem Core als ESP-IDF-Komponente).
 
 ## Ergebnis dieses Tests entscheidet über das weitere Vorgehen
 
