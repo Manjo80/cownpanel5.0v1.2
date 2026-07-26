@@ -13,6 +13,8 @@
 // testen Buzzer und Backlight-Stufen.
 
 #include <Wire.h>
+#include <esp_system.h>
+#include "esp_private/periph_ctrl.h"
 #include "pins.h"
 #include "LGFX_Driver.h"
 #include "touch_probe.h"
@@ -66,6 +68,11 @@ void setup() {
   delay(200);
   Serial.println("Stage 1: Display + Touch + Buzzer -- boot");
 
+  // Objektiver Reset-Grund statt "Reset-Knopf gedrueckt" nach Gefuehl --
+  // zeigt z. B. POWERON_RESET (Stromlos) vs. SW_CPU_RESET/USB_UART_CHIP_RESET
+  // (Reset-Knopf/Serial-Monitor-Autoreset).
+  Serial.printf("Reset-Grund: %d\n", (int)esp_reset_reason());
+
   // PSRAM-Diagnose: wenn dieser Wert bei 0 oder sehr klein liegt, ist
   // "OPI PSRAM" im Werkzeuge-Menue NICHT aktiv -- der 768-KB-Framebuffer
   // passt dann nicht ins SRAM und das Panel bleibt schwarz. Springt bei
@@ -92,6 +99,15 @@ void setup() {
   uint8_t gtAddr = probeGT911Address();
   Serial.printf("GT911 gefunden auf Adresse 0x%02X\n", gtAddr);
   lcd.setTouchAddr(gtAddr);
+
+  // Experimentelle Massnahme gegen "laeuft nach Stromlos-Start, aber nicht
+  // nach Reset-Knopf/Serial-Autoreset": LCD_CAM- und GDMA-Peripherie, die
+  // Bus_RGB fuer die Pixelausgabe nutzt, hart zuruecksetzen (Reset-Leitung
+  // toggeln), statt uns darauf zu verlassen, dass ein CPU-Reset das
+  // zuverlaessig miterledigt hat.
+  Serial.println("Reset LCD_CAM/GDMA-Peripherie ...");
+  periph_module_reset(PERIPH_LCD_CAM_MODULE);
+  periph_module_reset(PERIPH_GDMA_MODULE);
 
   Serial.println("lcd.init() ...");
   bool initOk = lcd.init();
