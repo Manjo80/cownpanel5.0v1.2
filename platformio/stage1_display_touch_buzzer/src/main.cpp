@@ -25,6 +25,15 @@
 
 LGFX lcd;
 
+// Off-Screen-Puffer fuer Buttons: LovyanGFX bietet fuer RGB-Panels KEINEN
+// Tearing-Schutz (Panel_RGB::waitDisplay() ist ein Leerlauf-Stub -- kein
+// Vsync-Warten, kein Doppelpuffer). Ein Button direkt in mehreren Schritten
+// (Fuellung, Rahmen, Text) auf den live gescannten Framebuffer zu zeichnen
+// kann daher als halbfertiger Zwischenstand sichtbar werden ("zerrissenes"
+// Bild/Streifen). Fix: Button komplett unsichtbar in einem Sprite aufbauen
+// und erst als EIN fertiges Bild per pushSprite() auf den Schirm schreiben.
+LGFX_Sprite btnSprite(&lcd);
+
 struct Button {
   int x, y, w, h;
   const char *label;
@@ -40,12 +49,14 @@ const uint16_t bgColors[] = { TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_BLACK };
 uint8_t bgIndex = 0;
 
 void drawButton(const Button &b, uint16_t fill) {
-  lcd.fillRoundRect(b.x, b.y, b.w, b.h, 8, fill);
-  lcd.drawRoundRect(b.x, b.y, b.w, b.h, 8, TFT_WHITE);
-  lcd.setTextColor(TFT_WHITE);
-  lcd.setTextSize(2);
-  lcd.setTextDatum(lgfx::middle_center);
-  lcd.drawString(b.label, b.x + b.w / 2, b.y + b.h / 2);
+  btnSprite.fillSprite(bgColors[bgIndex]);
+  btnSprite.fillRoundRect(0, 0, b.w, b.h, 8, fill);
+  btnSprite.drawRoundRect(0, 0, b.w, b.h, 8, TFT_WHITE);
+  btnSprite.setTextColor(TFT_WHITE);
+  btnSprite.setTextSize(2);
+  btnSprite.setTextDatum(lgfx::middle_center);
+  btnSprite.drawString(b.label, b.w / 2, b.h / 2);
+  btnSprite.pushSprite(b.x, b.y);
 }
 
 bool inside(const Button &b, int32_t x, int32_t y) {
@@ -121,6 +132,9 @@ void setup() {
   Serial.println("lcd.startWrite() ...");
   lcd.startWrite();
   lcd.setRotation(0);
+
+  btnSprite.setColorDepth(16);
+  btnSprite.createSprite(220, 60); // groesste Button-Breite/-Hoehe in diesem Sketch
 
   // Reihenfolge wichtig: Backlight/Buzzer-Kommandos erst NACH lcd.init(),
   // sonst ueberschreibt die Panel-Bring-up-Sequenz den Zustand.
