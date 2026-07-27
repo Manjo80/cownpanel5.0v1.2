@@ -9,7 +9,7 @@ in der sie üblicherweise ans Laufen gebracht werden:
 | `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | fertig, RGB-Ausgabe auf esp_lcd_panel_rgb umgebaut (siehe unten), an echter Hardware verifiziert (sauberes Bild, Touch nach Stromlos-Start OK) |
 | `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | fertig, an echter Hardware verifiziert (2 Boards, inkl. Fix für Task-Race beim ESP-NOW-Empfang, siehe Abschnitt 7) |
 | `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt erhalten) | auf esp_lcd_panel_rgb umgebaut, wird getestet |
-| `04_sd_card/` | SD-/TF-Karte über SPI | fertig (nutzt noch LovyanGFX Bus_RGB) |
+| `04_sd_card/` | SD-/TF-Karte: Live-Erkennung (Einstecken/Herausziehen) + fortlaufendes ESP-NOW-Log — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben erhalten) | auf esp_lcd_panel_rgb umgebaut, wird getestet |
 | `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) | fertig (nutzt noch LovyanGFX Bus_RGB) |
 
 ### Wichtige Architekturänderung (esp_lcd_panel_rgb statt LovyanGFX Bus_RGB)
@@ -23,17 +23,17 @@ kontinuierlichen GDMA-Bildausgabe um dieselbe PSRAM-Bandbreite konkurrieren.
 Espressifs eigener ESP-IDF-Treiber (`esp_lcd_panel_rgb`) hat dafür einen
 Bounce Buffer (kleiner SRAM-Zwischenpuffer) eingebaut.
 
-`01_display_touch_buzzer`, `02_wifi_espnow` und `03_rtc` nutzen deshalb
-jetzt `esp_lcd_panel_rgb` direkt für die Hardware-Ausgabe (`rgb_panel.h`)
-und GT911-Touch eigenständig ohne LGFX-Device (`touch_standalone.h`).
-LovyanGFX wird nur noch für die Zeichen-API genutzt: `LGFX_Sprite canvas`
-zeigt per `setBuffer()` direkt auf den von `esp_lcd_panel_rgb`
-bereitgestellten Framebuffer. Zusätzlich wartet `setup()` 600 ms zwischen
-`Wire.begin()` und der ersten Touch-Kommunikation, da der GT911 nach einem
-echten Stromlos-Start selbst noch Boot-Zeit braucht (nach Reset-Knopf fällt
-das dort nicht auf, da der Chip dort schon läuft). Die Stages 4-5 nutzen
-noch die alte LovyanGFX-Bus_RGB-Variante — werden erst umgestellt, sobald
-sie an der Reihe sind.
+`01_display_touch_buzzer`, `02_wifi_espnow`, `03_rtc` und `04_sd_card`
+nutzen deshalb jetzt `esp_lcd_panel_rgb` direkt für die Hardware-Ausgabe
+(`rgb_panel.h`) und GT911-Touch eigenständig ohne LGFX-Device
+(`touch_standalone.h`). LovyanGFX wird nur noch für die Zeichen-API
+genutzt: `LGFX_Sprite canvas` zeigt per `setBuffer()` direkt auf den von
+`esp_lcd_panel_rgb` bereitgestellten Framebuffer. Zusätzlich wartet
+`setup()` 600 ms zwischen `Wire.begin()` und der ersten Touch-Kommunikation,
+da der GT911 nach einem echten Stromlos-Start selbst noch Boot-Zeit
+braucht (nach Reset-Knopf fällt das dort nicht auf, da der Chip dort schon
+läuft). `05_pn532_spi` nutzt noch die alte LovyanGFX-Bus_RGB-Variante —
+wird erst umgestellt, wenn es an der Reihe ist.
 
 Jeder Ordner ist ein vollständiger, eigenständiger Arduino-Sketch (Ordnername
 = `.ino`-Dateiname, wie von der Arduino-IDE verlangt) und enthält seine
@@ -204,6 +204,14 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   `info->src_addr`, ist davon nicht betroffen und bleibt korrekt). `setup()`
   wartet deshalb nach `WiFi.mode(WIFI_STA)` bis zu 2s auf eine echte
   MAC-Adresse, bevor `outgoing.text` gefüllt wird.
+- **SD-Karte während des Betriebs eingesteckt/entfernt wird nicht erkannt:**
+  `SD.cardType()` liefert nach dem ersten `SD.begin()` nur den
+  zwischengespeicherten Wert zurück, keine Live-Abfrage der Hardware.
+  `checkSdCard()` (Stage 4) macht deshalb alle 2s einen kompletten Remount
+  (`SD.end()` + `sdSpi.end()` + `sdSpi.begin()` + `SD.begin()`) und
+  vergleicht das Ergebnis mit dem zuletzt bekannten Zustand — nur bei einem
+  tatsächlichen Wechsel (eingesteckt ↔ nicht lesbar) wird neu gezeichnet
+  bzw. `/espnow_log.txt` eine neue Startmarke hinzugefügt.
 - **PN532 antwortet nicht / GetFirmwareVersion schlägt fehl:** DIP-Schalter
   auf dem Modul falsch (muss SPI = Sw1 OFF/Sw2 ON sein), oder
   `PN532_PACKBUFFSIZ`-Patch fehlt.

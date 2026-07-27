@@ -14,6 +14,7 @@
 // S1/S0 = 1/1 ("MIC & TF Card"), siehe README.md Abschnitt 14. In diesem
 // Modus fuehren IO4/5/6 zur SD-Karte statt zum Wireless-Header.
 
+#include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
