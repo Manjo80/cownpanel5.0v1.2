@@ -13,12 +13,9 @@ Primäre Entwicklungsumgebung für dieses Projekt (statt Arduino IDE), aus zwei 
    was besonders bei den Patches/Versionsvorgaben aus früheren Gesprächen
    half.
 
-Die eigentliche Ursache für die hartnäckigen Bildstreifen/-fehler war
-fehlendes Anti-Tearing beim Zeichnen in den PSRAM-Framebuffer (siehe
-`firmware/README.md`) — jeder Stage-Ordner nutzt deshalb Espressifs
-`esp_lcd_panel_rgb`-Treiber statt LovyanGFX's `Bus_RGB`, mit doppeltem
-Framebuffer (`num_fbs = 2`) statt Bounce Buffer, seit die Bounce-Buffer-
-Version bei Stage 2 noch schwache Text-"Geister" bei Teil-Redraws zeigte.
+Die eigentliche Ursache für die hartnäckigen Bildstreifen war ein Bounce-
+Buffer-Problem (siehe `firmware/README.md`) — jeder Stage-Ordner nutzt
+deshalb Espressifs `esp_lcd_panel_rgb`-Treiber statt LovyanGFX's `Bus_RGB`.
 
 ## Voraussetzungen
 
@@ -61,7 +58,7 @@ Jeder Stage-Ordner enthält:
 | `sdkconfig.defaults` | Fast leer (Elecrows Original enthält hier nur LVGL-Einstellungen); muss aber als Datei existieren |
 | `partitions.csv` | 1:1 aus Elecrows offiziellem PlatformIO-Beispiel übernommen |
 | `src/main.cpp` | Inhaltlich identisch zum jeweiligen `firmware/0X_*/*.ino` |
-| `include/rgb_panel.h` | RGB-Panel-Bringup über `esp_lcd_panel_rgb` (doppelter Framebuffer statt LovyanGFX Bus_RGB) |
+| `include/rgb_panel.h` | RGB-Panel-Bringup über `esp_lcd_panel_rgb` (Bounce Buffer statt LovyanGFX Bus_RGB) |
 | `include/touch_standalone.h` | GT911-Touch eigenständig, ohne LGFX-Device |
 | `include/*.h` (restliche) | Pin-/Adressreferenz, Touch-Timing-Fixes, Backlight/Buzzer |
 
