@@ -7,6 +7,14 @@
 // + fortlaufendes UID-Lesen aufgelegter Karten. Der Bildschirm ist jetzt
 // SEHR voll -- bewusst so gewaehlt (kompakter statt Funktionen wegzulassen).
 //
+// AUF NUTZERWUNSCH um 90 Grad gedreht (Hochformat statt Querformat, siehe
+// DISPLAY_ROTATION weiter unten) -- NUR in Stage 5, Stufen 1-4 bleiben beim
+// urspruenglichen 800x480-Querformat. Das Panel selbst ist als 800x480
+// fest verdrahtet (rgb_panel.h); die Drehung passiert rein per
+// canvas.setRotation(), inkl. einer manuellen Ruecktransformation der
+// GT911-Touch-Rohkoordinaten (rotateTouchToLogical()), da der Touch-Chip
+// von dieser Software-Drehung nichts weiss.
+//
 // VERKABELUNG (siehe README.md Abschnitt 6 -- Pins aus zwei Headern
 // zusammengesammelt, kein freier Hardware-SPI-Block, daher Software-SPI):
 //   PN532 VCC  -> 3V3   (Wireless-Header)
@@ -71,6 +79,23 @@
 // siehe rgb_panel.h).
 LGFX_Sprite canvas;
 
+// Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
+// feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
+// Drehung passiert NICHT in diesen Hardware-Timings, sondern rein in der
+// Koordinatentransformation von canvas.setRotation() (siehe setup()) --
+// canvas.width()/height() liefern danach 480x800 (Hochformat), und alle
+// Layout-Konstanten unten sind fuer dieses gedrehte 480x800-Koordinaten-
+// system gebaut.
+//
+// 1 = 90 Grad im Uhrzeigersinn, 3 = 270 Grad (=90 Grad gegen den
+// Uhrzeigersinn) -- welcher der beiden Werte am echten, montierten Panel
+// dazu fuehrt, dass 0/0 unten links landet (statt oben rechts), laesst
+// sich nur am Geraet selbst pruefen. Steht das Bild auf dem Kopf oder
+// treffen Touch-Eingaben nicht die Buttons: hier auf 3 aendern -- die
+// Touch-Transformation (rotateTouchToLogical() weiter unten) folgt
+// automatisch demselben Wert, da dort dieselbe Konstante verwendet wird.
+const uint8_t DISPLAY_ROTATION = 1;
+
 SPIClass sdSpi(HSPI);
 const char *LOG_FILE_PATH = "/espnow_log.txt";
 
@@ -83,15 +108,16 @@ struct Button {
   const char *label;
 };
 
-// Kompakteres Layout als in Stage 4 (siehe update*Info()-Bereichsgrenzen
-// unten) -- bewusst dichter gepackt statt Funktionen wegzulassen. Nochmal
-// etwas enger als beim ersten Stage-5-Layout, um Platz fuer die zweite
-// Zeile (DESFire-Zusammenfassung) im UID-Bereich zu schaffen.
-Button btnSetCompile = { 40,  358, 340, 42, "STELLEN (Compile-Zeit)" };
-Button btnNtpSync    = { 420, 358, 340, 42, "NTP-SYNC" };
-Button btnBeep       = { 40,  408, 220, 46, "BEEP" };
-Button btnBrightUp   = { 300, 408, 220, 46, "BACKLIGHT +" };
-Button btnBrightDn   = { 560, 408, 220, 46, "BACKLIGHT -" };
+// Layout fuer das gedrehte 480 (breit) x 800 (hoch) Koordinatensystem --
+// eine Spalte statt eines Rasters aus zwei Reihen, da bei 480px Breite
+// nicht mehr genug Platz fuer zwei/drei Buttons nebeneinander ist. Dafuer
+// steht durch die 800px Hoehe deutlich mehr vertikaler Platz zur
+// Verfuegung als im vorherigen 800x480-Querformat-Layout.
+Button btnSetCompile = { 16, 336, 448, 56, "STELLEN (Compile-Zeit)" };
+Button btnNtpSync    = { 16, 404, 448, 56, "NTP-SYNC" };
+Button btnBeep       = { 16, 472, 448, 56, "BEEP" };
+Button btnBrightUp   = { 16, 540, 448, 56, "BACKLIGHT +" };
+Button btnBrightDn   = { 16, 608, 448, 56, "BACKLIGHT -" };
 
 uint8_t backlightPercent = 80;
 
@@ -147,15 +173,15 @@ uint32_t lastUidReadMs = 0;
 
 // Bereichsgrenzen der einzelnen Update-Funktionen -- an einer Stelle
 // definiert, damit das fillRect() in der jeweiligen Funktion garantiert
-// mit sich selbst konsistent bleibt. Kompakter als in Stage 4, um Platz
-// fuer PN532-Status + UID-Zeile zu schaffen.
-const int SD_INFO_Y = 112, SD_INFO_H = 26;
-const int RTC_INFO_Y = 142, RTC_INFO_H = 34;
-const int PN532_INFO_Y = 180, PN532_INFO_H = 26;
-const int SEND_INFO_Y = 210, SEND_INFO_H = 42;
-const int RECV_INFO_Y = 256, RECV_INFO_H = 40;
+// mit sich selbst konsistent bleibt. Fuer 480px Breite (siehe
+// DISPLAY_ROTATION oben) gestapelt statt wie zuvor auf 800px verteilt.
+const int SD_INFO_Y = 76, SD_INFO_H = 18;
+const int RTC_INFO_Y = 96, RTC_INFO_H = 32;
+const int PN532_INFO_Y = 132, PN532_INFO_H = 18;
+const int SEND_INFO_Y = 154, SEND_INFO_H = 34;
+const int RECV_INFO_Y = 192, RECV_INFO_H = 34;
 // UID_INFO jetzt zweizeilig: UID selbst + DESFire-Zusammenfassung darunter.
-const int UID_INFO_Y = 300, UID_INFO_H = 50;
+const int UID_INFO_Y = 230, UID_INFO_H = 40;
 
 void drawButton(const Button &b, uint16_t fill) {
   canvas.fillRoundRect(b.x, b.y, b.w, b.h, 8, fill);
@@ -170,6 +196,24 @@ bool inside(const Button &b, int32_t x, int32_t y) {
   return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
+// Wandelt eine ROHE Touch-Koordinate (physisches 800x480-Panel-Raster, wie
+// vom GT911 geliefert -- touch_standalone.h wendet KEINE Rotation an,
+// siehe dortiger Kopfkommentar "reine Identitaetsabbildung") in die
+// GEDREHTE logische Bildschirm-Koordinate (480x800) um, in der die Button-
+// Layouts oben definiert sind. Formeln entsprechen 1:1 der Adafruit_GFX-/
+// LovyanGFX-Rotationskonvention (aus GFXcanvas::drawPixel() zurueck-
+// gerechnet) -- folgt automatisch DISPLAY_ROTATION oben.
+inline void rotateTouchToLogical(int32_t &x, int32_t &y) {
+  int32_t rawX = x, rawY = y;
+  if (DISPLAY_ROTATION == 1) {
+    x = rawY;
+    y = LCD_WIDTH - 1 - rawX;
+  } else if (DISPLAY_ROTATION == 3) {
+    x = LCD_HEIGHT - 1 - rawY;
+    y = rawX;
+  }
+}
+
 // Titel + eigene MAC-Adresse + alle fuenf Buttons -- aendert sich nur, wenn
 // sich die Hintergrundfarbe aendert (Tap auf freie Flaeche).
 void drawStaticParts() {
@@ -177,12 +221,16 @@ void drawStaticParts() {
   canvas.setTextDatum(lgfx::top_left);
   canvas.setTextColor(TFT_WHITE);
   canvas.setTextSize(3);
-  canvas.setCursor(20, 20);
+  canvas.setCursor(12, 12);
   canvas.println("CrowPanel Advance 5.0");
-  canvas.setTextSize(2);
+  // Hochformat ist nur 480px breit statt vormals 800px -- laengere
+  // Zeilen (Untertitel, MAC-Adresse) laufen bei textSize(2) aus dem
+  // Bild, deshalb hier textSize(1).
+  canvas.setTextSize(1);
+  canvas.setCursor(12, 40);
   canvas.println("Stage 5: PN532 NFC + SD + RTC + WLAN/ESP-NOW");
 
-  canvas.setCursor(20, 90);
+  canvas.setCursor(12, 56);
   canvas.print("Eigene MAC: ");
   canvas.println(WiFi.macAddress());
 
@@ -196,21 +244,21 @@ void drawStaticParts() {
 // Nur die SD-Statuszeile -- wird ausschliesslich bei einem tatsaechlichen
 // Zustandswechsel (Karte erkannt/entfernt) aus checkSdCard() aufgerufen.
 void updateSdInfo() {
-  canvas.fillRect(0, SD_INFO_Y, LCD_WIDTH, SD_INFO_H, bgColors[bgIndex]);
+  canvas.fillRect(0, SD_INFO_Y, canvas.width(), SD_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(2);
+  canvas.setTextSize(1);
   canvas.setTextColor(sdStatusColor);
-  canvas.setCursor(20, SD_INFO_Y + 3);
+  canvas.setCursor(12, SD_INFO_Y + 2);
   canvas.print(sdStatusMsg);
 }
 
 // Nur die RTC-Zeile -- wird jede Sekunde aus loop() aufgerufen, unabhaengig
 // von SD-/PN532-/ESP-NOW-Updates (eigener Bildschirmbereich).
 void updateRtcInfo() {
-  canvas.fillRect(0, RTC_INFO_Y, LCD_WIDTH, RTC_INFO_H, bgColors[bgIndex]);
+  canvas.fillRect(0, RTC_INFO_Y, canvas.width(), RTC_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
   canvas.setTextSize(3);
-  canvas.setCursor(20, RTC_INFO_Y);
+  canvas.setCursor(12, RTC_INFO_Y);
 
   RtcDateTime dt;
   char buf[64];
@@ -227,26 +275,26 @@ void updateRtcInfo() {
 // Nur die PN532-Statuszeile -- wird einmalig nach pn532Begin() gezeichnet
 // (kein Live-Hotplug-Polling wie bei der SD-Karte, siehe oben).
 void updatePn532Info() {
-  canvas.fillRect(0, PN532_INFO_Y, LCD_WIDTH, PN532_INFO_H, bgColors[bgIndex]);
+  canvas.fillRect(0, PN532_INFO_Y, canvas.width(), PN532_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(2);
+  canvas.setTextSize(1);
   canvas.setTextColor(pn532StatusColor);
-  canvas.setCursor(20, PN532_INFO_Y + 3);
+  canvas.setCursor(12, PN532_INFO_Y + 2);
   canvas.print(pn532StatusMsg);
 }
 
 // Nur Sendezaehler + letzter Sendestatus -- wird ausschliesslich vom
 // 2s-Sendezyklus in loop() aufgerufen.
 void updateSendInfo() {
-  canvas.fillRect(0, SEND_INFO_Y, LCD_WIDTH, SEND_INFO_H, bgColors[bgIndex]);
+  canvas.fillRect(0, SEND_INFO_Y, canvas.width(), SEND_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(2);
+  canvas.setTextSize(1);
 
   canvas.setTextColor(TFT_WHITE);
-  canvas.setCursor(20, SEND_INFO_Y + 4);
+  canvas.setCursor(12, SEND_INFO_Y + 2);
   canvas.printf("ESP-NOW gesendet: %lu\n", (unsigned long)outgoing.counter);
 
-  canvas.setCursor(20, SEND_INFO_Y + 22);
+  canvas.setCursor(12, SEND_INFO_Y + 18);
   if (haveSendResult) {
     canvas.setTextColor(lastSendOk ? TFT_GREENYELLOW : TFT_RED);
     canvas.printf("Letzter Sendestatus: %s\n", lastSendOk ? "OK" : "FEHLER");
@@ -259,16 +307,16 @@ void updateSendInfo() {
 // Nur die zuletzt empfangene Nachricht -- wird ausschliesslich aus
 // onDataRecv() (ueber recvPending, siehe loop()) aufgerufen.
 void updateReceivedInfo() {
-  canvas.fillRect(0, RECV_INFO_Y, LCD_WIDTH, RECV_INFO_H, bgColors[bgIndex]);
+  canvas.fillRect(0, RECV_INFO_Y, canvas.width(), RECV_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(2);
+  canvas.setTextSize(1);
   canvas.setTextColor(TFT_GREENYELLOW);
-  canvas.setCursor(20, RECV_INFO_Y + 4);
+  canvas.setCursor(12, RECV_INFO_Y + 2);
   if (haveReceived) {
     canvas.printf("Empfangen von %02X:%02X:%02X:%02X:%02X:%02X:\n",
                   lastSrcMac[0], lastSrcMac[1], lastSrcMac[2],
                   lastSrcMac[3], lastSrcMac[4], lastSrcMac[5]);
-    canvas.setCursor(20, RECV_INFO_Y + 22);
+    canvas.setCursor(12, RECV_INFO_Y + 18);
     canvas.printf("\"%s\" (Zaehler %lu)", lastReceived.text, (unsigned long)lastReceived.counter);
   } else {
     canvas.println("Noch keine ESP-NOW-Nachricht empfangen.");
@@ -279,14 +327,14 @@ void updateReceivedInfo() {
 // in /desfire_log.txt auf der SD-Karte, siehe desfireDeepRead()) -- wird
 // ausschliesslich aus loop()s PN532-Polling aufgerufen.
 void updateUidInfo() {
-  canvas.fillRect(0, UID_INFO_Y, LCD_WIDTH, UID_INFO_H, bgColors[bgIndex]);
+  canvas.fillRect(0, UID_INFO_Y, canvas.width(), UID_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(2);
+  canvas.setTextSize(1);
   canvas.setTextColor(TFT_GREENYELLOW);
-  canvas.setCursor(20, UID_INFO_Y + 3);
+  canvas.setCursor(12, UID_INFO_Y + 2);
   canvas.print(uidMsg);
   canvas.setTextColor(TFT_LIGHTGREY);
-  canvas.setCursor(20, UID_INFO_Y + 26);
+  canvas.setCursor(12, UID_INFO_Y + 20);
   canvas.print(desfireSummaryMsg);
 }
 
@@ -662,6 +710,11 @@ void setup() {
   }
   canvas.setColorDepth(16);
   canvas.setBuffer(g_rgbFrameBuffer, LCD_WIDTH, LCD_HEIGHT, 16);
+  // 90-Grad-Drehung (siehe DISPLAY_ROTATION oben) -- rein eine
+  // Koordinatentransformation von LovyanGFX auf demselben physischen
+  // Framebuffer, die RGB-Timings in rgb_panel.h bleiben unveraendert bei
+  // 800x480. canvas.width()/height() liefern ab hier 480/800.
+  canvas.setRotation(DISPLAY_ROTATION);
 
   setBacklightPercent(backlightPercent);
 
@@ -767,6 +820,7 @@ void loop() {
 
   int32_t x, y;
   if (touchStandaloneGetXY(&x, &y)) {
+    rotateTouchToLogical(x, y);
     if (inside(btnSetCompile, x, y)) {
       drawButton(btnSetCompile, TFT_GREEN);
       setRtcFromCompileTime();
@@ -806,7 +860,7 @@ void loop() {
       drawButton(btnBrightDn, TFT_GREEN);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
-    } else if (y < 352) {
+    } else if (y < 336) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticParts();

@@ -317,7 +317,47 @@ Kopfkommentar der Datei) und braucht `mbedtls/des.h` gar nicht mehr — der
 Fehler kann damit weder in PlatformIO noch in der Arduino IDE mehr
 auftreten, da beide Toolchains dieselbe `desfire.h` verwenden.
 
-## 9. Ausblick — nicht Teil dieser fünf Stages
+## 9. Hochformat-Drehung (Stage 5, `DISPLAY_ROTATION`)
+
+Auf Nutzerwunsch läuft Stage 5 im Hochformat (480 breit × 800 hoch) statt
+im ursprünglichen Querformat (800×480) — **nur** Stage 5, die Stufen 1-4
+bleiben unverändert im Querformat.
+
+Das Panel selbst ist als 800×480 fest verdrahtet (feste RGB-Timings in
+`rgb_panel.h`, `h_res`/`v_res` = `LCD_WIDTH`/`LCD_HEIGHT`) — die Drehung
+ändert diese Hardware-Timings NICHT, sondern passiert rein als
+Koordinatentransformation in `canvas.setRotation(DISPLAY_ROTATION)`
+(direkt nach `canvas.setBuffer()` in `setup()`). Ab da liefern
+`canvas.width()`/`canvas.height()` die gedrehten Maße (480/800), und alle
+Layout-Konstanten (Buttons, `*_INFO_Y`-Bereichsgrenzen) sind für dieses
+480×800-System gebaut — eine Spalte Buttons statt des vorherigen
+Zwei-Reihen-Rasters, da bei 480px Breite nicht mehr genug Platz für zwei
+oder drei Buttons nebeneinander ist.
+
+**Zwei Dinge, die beim Testen an echter Hardware geprüft werden müssen**
+(am Schreibtisch nicht verifizierbar):
+
+- **Drehrichtung:** `DISPLAY_ROTATION = 1` (90° im Uhrzeigersinn) ist ein
+  Startwert — ob das am montierten Panel wirklich "0/0 unten links"
+  ergibt oder das Bild auf dem Kopf steht, hängt von der physischen
+  Montage ab. Falls falsch: auf `3` (270°, = 90° gegen den Uhrzeigersinn)
+  ändern.
+- **Touch-Koordinaten:** Der GT911-Touch-Chip kennt `canvas.setRotation()`
+  nicht — er liefert weiterhin rohe Koordinaten im physischen 800×480-
+  Raster (siehe Kopfkommentar in `touch_standalone.h`, "reine
+  Identitätsabbildung"). Die neue Funktion `rotateTouchToLogical()`
+  rechnet das per Adafruit_GFX-/LovyanGFX-Rotationsformel (aus
+  `GFXcanvas::drawPixel()` zurückgerechnet) in die gedrehte 480×800-
+  Koordinate um, **bevor** die Button-Trefferprüfung (`inside()`) läuft.
+  Sie liest denselben `DISPLAY_ROTATION`-Wert wie `canvas.setRotation()`
+  — beide bleiben also automatisch synchron, wenn der Wert oben
+  geändert wird. Reagieren Buttons trotz sichtbar korrekt gedrehtem Bild
+  nicht (oder an der falschen Stelle), ist das ein Hinweis, dass die
+  Rotationsformel für den gewählten `DISPLAY_ROTATION`-Wert nicht zur
+  tatsächlichen LovyanGFX-Konvention passt — bitte melden, dann wird die
+  Formel korrigiert.
+
+## 10. Ausblick — nicht Teil dieser fünf Stages
 
 - Kombiniertes Gesamtprojekt, das alle Subsysteme gleichzeitig nutzt.
 - DESFire-Applikations-Lebenszyklus über PN532 (CreateApplication,
