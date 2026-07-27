@@ -24,10 +24,17 @@
 //    Verhalten, kein Bug. Serial-Ausgaben an jedem Protokollschritt
 //    sollen helfen, einen echten Bug von "Karte hat andere Schluessel"
 //    zu unterscheiden.
+//  - DES/2K3DES ist HIER SELBST implementiert (Standard-FIPS-46-3-
+//    Tabellen), NICHT ueber mbedtls: ESP-IDFs mbedtls-Komponente wird bei
+//    framework=arduino als fertig vorkompiliertes Binary ausgeliefert
+//    (nicht aus Quellcode neu gebaut) -- CONFIG_MBEDTLS_DES_C in
+//    sdkconfig.defaults hat darauf keinen Einfluss, das Linken gegen
+//    mbedtls_des3_* schlaegt deshalb immer mit "undefined reference" fehl,
+//    egal was in sdkconfig steht. AES (mbedtls_aes_*) ist dagegen bereits
+//    im vorkompilierten Binary enthalten und nutzt weiterhin mbedtls.
 
 #include <Arduino.h>
 #include <Adafruit_PN532.h>
-#include <mbedtls/des.h>
 #include <mbedtls/aes.h>
 #include <esp_random.h>
 
@@ -219,6 +226,168 @@ inline void desfireRotateLeft1(uint8_t *buf, size_t len) {
   buf[len - 1] = first;
 }
 
+// ---------------------------------------------------------------------
+// Eigene DES/2K3DES-Implementierung (FIPS 46-3), OHNE mbedtls.
+//
+// Grund: ESP-IDFs mbedtls-Komponente wird bei framework=arduino als FERTIG
+// VORKOMPILIERTES Binary mit dem Framework-Paket ausgeliefert (nicht aus
+// Quellcode neu gebaut) -- CONFIG_MBEDTLS_DES_C=y in sdkconfig.defaults
+// hat darauf KEINEN Einfluss, das Linken gegen mbedtls_des3_* schlaegt
+// deshalb mit "undefined reference" fehl, egal was in sdkconfig steht
+// (mbedtls_aes_* ist dagegen bereits im vorkompilierten Binary enthalten,
+// daher funktioniert die AES-Authentifizierung unten weiterhin ueber
+// mbedtls). Um nicht von der (nicht beeinflussbaren) Cipher-Auswahl des
+// vorkompilierten Frameworks abhaengig zu sein, ist DES hier komplett
+// selbst implementiert -- Standard-FIPS-46-3-Tabellen, unveraendert seit
+// 1977, in jedem DES-Lehrbuch/jeder Referenzimplementierung identisch.
+// ---------------------------------------------------------------------
+
+static const uint8_t DES_IP[64] = {
+  58,50,42,34,26,18,10,2, 60,52,44,36,28,20,12,4,
+  62,54,46,38,30,22,14,6, 64,56,48,40,32,24,16,8,
+  57,49,41,33,25,17,9,1,  59,51,43,35,27,19,11,3,
+  61,53,45,37,29,21,13,5, 63,55,47,39,31,23,15,7
+};
+static const uint8_t DES_FP[64] = {
+  40,8,48,16,56,24,64,32, 39,7,47,15,55,23,63,31,
+  38,6,46,14,54,22,62,30, 37,5,45,13,53,21,61,29,
+  36,4,44,12,52,20,60,28, 35,3,43,11,51,19,59,27,
+  34,2,42,10,50,18,58,26, 33,1,41,9,49,17,57,25
+};
+static const uint8_t DES_E[48] = {
+  32,1,2,3,4,5, 4,5,6,7,8,9, 8,9,10,11,12,13, 12,13,14,15,16,17,
+  16,17,18,19,20,21, 20,21,22,23,24,25, 24,25,26,27,28,29, 28,29,30,31,32,1
+};
+static const uint8_t DES_P[32] = {
+  16,7,20,21, 29,12,28,17, 1,15,23,26, 5,18,31,10,
+  2,8,24,14, 32,27,3,9, 19,13,30,6, 22,11,4,25
+};
+static const uint8_t DES_PC1[56] = {
+  57,49,41,33,25,17,9, 1,58,50,42,34,26,18,
+  10,2,59,51,43,35,27, 19,11,3,60,52,44,36,
+  63,55,47,39,31,23,15, 7,62,54,46,38,30,22,
+  14,6,61,53,45,37,29, 21,13,5,28,20,12,4
+};
+static const uint8_t DES_PC2[48] = {
+  14,17,11,24,1,5, 3,28,15,6,21,10, 23,19,12,4,26,8, 16,7,27,20,13,2,
+  41,52,31,37,47,55, 30,40,51,45,33,48, 44,49,39,56,34,53, 46,42,50,36,29,32
+};
+static const uint8_t DES_SHIFTS[16] = {1,1,2,2,2,2,2,2,1,2,2,2,2,2,2,1};
+static const uint8_t DES_SBOX[8][64] = {
+  {14,4,13,1,2,15,11,8,3,10,6,12,5,9,0,7, 0,15,7,4,14,2,13,1,10,6,12,11,9,5,3,8,
+   4,1,14,8,13,6,2,11,15,12,9,7,3,10,5,0, 15,12,8,2,4,9,1,7,5,11,3,14,10,0,6,13},
+  {15,1,8,14,6,11,3,4,9,7,2,13,12,0,5,10, 3,13,4,7,15,2,8,14,12,0,1,10,6,9,11,5,
+   0,14,7,11,10,4,13,1,5,8,12,6,9,3,2,15, 13,8,10,1,3,15,4,2,11,6,7,12,0,5,14,9},
+  {10,0,9,14,6,3,15,5,1,13,12,7,11,4,2,8, 13,7,0,9,3,4,6,10,2,8,5,14,12,11,15,1,
+   13,6,4,9,8,15,3,0,11,1,2,12,5,10,14,7, 1,10,13,0,6,9,8,7,4,15,14,3,11,5,2,12},
+  {7,13,14,3,0,6,9,10,1,2,8,5,11,12,4,15, 13,8,11,5,6,15,0,3,4,7,2,12,1,10,14,9,
+   10,6,9,0,12,11,7,13,15,1,3,14,5,2,8,4, 3,15,0,6,10,1,13,8,9,4,5,11,12,7,2,14},
+  {2,12,4,1,7,10,11,6,8,5,3,15,13,0,14,9, 14,11,2,12,4,7,13,1,5,0,15,10,3,9,8,6,
+   4,2,1,11,10,13,7,8,15,9,12,5,6,3,0,14, 11,8,12,7,1,14,2,13,6,15,0,9,10,4,5,3},
+  {12,1,10,15,9,2,6,8,0,13,3,4,14,7,5,11, 10,15,4,2,7,12,9,5,6,1,13,14,0,11,3,8,
+   9,14,15,5,2,8,12,3,7,0,4,10,1,13,11,6, 4,3,2,12,9,5,15,10,11,14,1,7,6,0,8,13},
+  {4,11,2,14,15,0,8,13,3,12,9,7,5,10,6,1, 13,0,11,7,4,9,1,10,14,3,5,12,2,15,8,6,
+   1,4,11,13,12,3,7,14,10,15,6,8,0,5,9,2, 6,11,13,8,1,4,10,7,9,5,0,15,14,2,3,12},
+  {13,2,8,4,6,15,11,1,10,9,3,14,5,0,12,7, 1,15,13,8,10,3,7,4,12,5,6,11,0,14,9,2,
+   7,11,4,1,9,12,14,2,0,6,10,13,15,3,5,8, 2,1,14,7,4,10,8,13,15,12,9,0,3,5,6,11}
+};
+
+// Liest outBits Bits (1-indexiert, MSB-zuerst) aus den unteren inBits Bits
+// von "in" gemaess table und packt sie MSB-zuerst in das Ergebnis.
+static uint64_t desPermute(uint64_t in, const uint8_t *table, int outBits, int inBits) {
+  uint64_t out = 0;
+  for (int i = 0; i < outBits; i++) {
+    int bitPos = table[i];
+    uint64_t bit = (in >> (inBits - bitPos)) & 1ULL;
+    out = (out << 1) | bit;
+  }
+  return out;
+}
+
+static uint64_t desBytesToBlock(const uint8_t b[8]) {
+  uint64_t v = 0;
+  for (int i = 0; i < 8; i++) v = (v << 8) | b[i];
+  return v;
+}
+static void desBlockToBytes(uint64_t v, uint8_t b[8]) {
+  for (int i = 7; i >= 0; i--) { b[i] = (uint8_t)(v & 0xFF); v >>= 8; }
+}
+
+// Schluesselplan: 16 Rundenschluessel (je 48 Bit) aus einem 8-Byte-DES-Schluessel.
+static void desKeySchedule(const uint8_t key8[8], uint64_t subkeys[16]) {
+  uint64_t key64 = desBytesToBlock(key8);
+  uint64_t pc1 = desPermute(key64, DES_PC1, 56, 64);
+  uint32_t c = (uint32_t)(pc1 >> 28) & 0x0FFFFFFFu;
+  uint32_t d = (uint32_t)pc1 & 0x0FFFFFFFu;
+  for (int round = 0; round < 16; round++) {
+    int shift = DES_SHIFTS[round];
+    c = ((c << shift) | (c >> (28 - shift))) & 0x0FFFFFFFu;
+    d = ((d << shift) | (d >> (28 - shift))) & 0x0FFFFFFFu;
+    uint64_t cd = ((uint64_t)c << 28) | d;
+    subkeys[round] = desPermute(cd, DES_PC2, 48, 56);
+  }
+}
+
+static uint32_t desF(uint32_t r, uint64_t subkey) {
+  uint64_t expanded = desPermute((uint64_t)r, DES_E, 48, 32);
+  uint64_t x = expanded ^ subkey;
+  uint32_t sOut = 0;
+  for (int i = 0; i < 8; i++) {
+    int shift = 42 - i * 6;
+    uint8_t six = (uint8_t)((x >> shift) & 0x3F);
+    uint8_t row = (uint8_t)(((six & 0x20) >> 4) | (six & 0x01));
+    uint8_t col = (uint8_t)((six >> 1) & 0x0F);
+    uint8_t sVal = DES_SBOX[i][row * 16 + col];
+    sOut = (sOut << 4) | sVal;
+  }
+  return (uint32_t)desPermute((uint64_t)sOut, DES_P, 32, 32);
+}
+
+// Ein 8-Byte-Block, Single-DES (16-Runden-Feistel-Netzwerk).
+static void desCryptBlock(const uint64_t subkeys[16], bool encrypt, const uint8_t in[8], uint8_t out[8]) {
+  uint64_t block = desBytesToBlock(in);
+  uint64_t ip = desPermute(block, DES_IP, 64, 64);
+  uint32_t l = (uint32_t)(ip >> 32);
+  uint32_t r = (uint32_t)ip;
+  for (int round = 0; round < 16; round++) {
+    int idx = encrypt ? round : (15 - round);
+    uint32_t newR = l ^ desF(r, subkeys[idx]);
+    l = r;
+    r = newR;
+  }
+  // Kein abschliessendes Vertauschen -- Vorausgabe ist R16||L16.
+  uint64_t preOutput = ((uint64_t)r << 32) | l;
+  uint64_t fp = desPermute(preOutput, DES_FP, 64, 64);
+  desBlockToBytes(fp, out);
+}
+
+struct Des3Keys {
+  uint64_t k1[16];
+  uint64_t k2[16];
+};
+
+// K1 = key16[0..7], K2 = key16[8..15] (bei einem 8-Byte-Werksschluessel,
+// hier auf 16 Byte dupliziert -- siehe Aufrufer -- ist K1=K2, was 2K3DES
+// auf Single-DES reduziert, exakt das erwartete Verhalten).
+static void desfireDes3SetKey(const uint8_t key16[16], Des3Keys &out) {
+  desKeySchedule(key16, out.k1);
+  desKeySchedule(key16 + 8, out.k2);
+}
+
+// 2K3DES EDE (Encrypt-Decrypt-Encrypt mit K1,K2,K1) fuer einen Block.
+static void des3CryptBlockEde(const Des3Keys &keys, bool encrypt, const uint8_t in[8], uint8_t out[8]) {
+  uint8_t tmp1[8], tmp2[8];
+  if (encrypt) {
+    desCryptBlock(keys.k1, true, in, tmp1);
+    desCryptBlock(keys.k2, false, tmp1, tmp2);
+    desCryptBlock(keys.k1, true, tmp2, out);
+  } else {
+    desCryptBlock(keys.k1, false, in, tmp1);
+    desCryptBlock(keys.k2, true, tmp1, tmp2);
+    desCryptBlock(keys.k1, false, tmp2, out);
+  }
+}
+
 // 2K3DES-CBC (mit K1=K2=key16[0..7], funktional identisch zu Single-DES
 // fuer den haeufigen Fall eines 8-Byte-Werksschluessels, der hier auf 16
 // Byte dupliziert wird -- siehe Aufrufer). IV wird NICHT ueber mehrere
@@ -226,14 +395,26 @@ inline void desfireRotateLeft1(uint8_t *buf, size_t len) {
 // (jeder Aufruf bekommt seinen IV explizit uebergeben).
 inline void desfireDes3Cbc(const uint8_t key16[16], const uint8_t iv[8], bool encrypt,
                             const uint8_t *in, uint8_t *out, size_t len) {
-  mbedtls_des3_context ctx;
-  mbedtls_des3_init(&ctx);
-  if (encrypt) mbedtls_des3_set2key_enc(&ctx, key16);
-  else mbedtls_des3_set2key_dec(&ctx, key16);
+  Des3Keys keys;
+  desfireDes3SetKey(key16, keys);
   uint8_t ivBuf[8];
   memcpy(ivBuf, iv, 8);
-  mbedtls_des3_crypt_cbc(&ctx, encrypt ? MBEDTLS_DES_ENCRYPT : MBEDTLS_DES_DECRYPT, len, ivBuf, in, out);
-  mbedtls_des3_free(&ctx);
+  size_t blocks = len / 8;
+  if (encrypt) {
+    for (size_t b = 0; b < blocks; b++) {
+      uint8_t xored[8];
+      for (int i = 0; i < 8; i++) xored[i] = in[b * 8 + i] ^ ivBuf[i];
+      des3CryptBlockEde(keys, true, xored, out + b * 8);
+      memcpy(ivBuf, out + b * 8, 8);
+    }
+  } else {
+    for (size_t b = 0; b < blocks; b++) {
+      uint8_t decrypted[8];
+      des3CryptBlockEde(keys, false, in + b * 8, decrypted);
+      for (int i = 0; i < 8; i++) out[b * 8 + i] = decrypted[i] ^ ivBuf[i];
+      memcpy(ivBuf, in + b * 8, 8);
+    }
+  }
 }
 
 inline void desfireAesCbc(const uint8_t key16[16], const uint8_t iv[16], bool encrypt,
