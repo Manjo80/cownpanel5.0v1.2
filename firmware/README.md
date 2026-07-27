@@ -228,17 +228,28 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   auf dem Modul falsch (muss SPI = Sw1 OFF/Sw2 ON sein), oder
   `PN532_PACKBUFFSIZ`-Patch fehlt.
 - **PN532 wird erkannt, aber beim Scannen einer DESFire-Karte passiert
-  nichts:** `readPassiveTargetID()` lief ursprünglich mit nur 10 ms Timeout
-  — DESFire-Karten antworten auf die ISO14443A-Anticollision/Select-
-  Sequenz teils spürbar langsamer als einfache Mifare-Classic-Karten, und
-  Software-SPI (statt Hardware-SPI) fügt zusätzliche Kommunikationslatenz
-  hinzu. Damit lief der Lesevorgang regelmäßig in den Timeout, ohne dass
-  überhaupt etwas sichtbar passierte. Fix: Timeout auf 100 ms erhöht.
-- **DESFire-Kommandos schlagen nach erfolgreichem UID-Read fehl:**
-  `readPassiveTargetID()` setzt nicht die interne `_inListedTag`-Variable —
-  für `inDataExchange()`-Kommandos muss stattdessen `inListPassiveTarget()`
-  zur Kartenaktivierung verwendet werden (in Stage 5 absichtlich noch nicht
-  gebraucht, da dort nur die Basisverbindung getestet wird).
+  nichts:** Ein früherer Versuch rief zuerst `readPassiveTargetID()` (mit
+  nur 10 ms Timeout) und danach zusätzlich `inListPassiveTarget()` auf.
+  10 ms war zu knapp — DESFire-Karten antworten auf die
+  ISO14443A-Anticollision/Select-Sequenz teils spürbar langsamer als
+  einfache Mifare-Classic-Karten, und Software-SPI (statt Hardware-SPI)
+  fügt zusätzliche Kommunikationslatenz hinzu, sodass der Lesevorgang
+  regelmäßig in den Timeout lief. Auf 100 ms erhöht, damit kam die UID
+  zwar an, aber der anschließende `inListPassiveTarget()`-Aufruf schlug an
+  echter Hardware fehl (`DESFire: inListPassiveTarget() fehlgeschlagen`,
+  siehe Foto-Report). Grund: `readPassiveTargetID()` und
+  `inListPassiveTarget()` senden **dasselbe** native
+  InListPassiveTarget-Kommando (`0x4A`) an den PN532 — der erste Aufruf
+  aktiviert/selektiert die Karte bereits, ein zweiter Aufruf direkt danach
+  pollt erneut nach einem Tag, während die Karte noch im aktivierten
+  Zustand ist und auf eine erneute Anticollision/Select-Sequenz nicht mehr
+  antwortet. **Fix:** nur noch ein einziger `inListPassiveTarget()`-Aufruf
+  zur Erkennung UND Aktivierung; kein `readPassiveTargetID()` mehr im
+  Poll-Pfad. Die für `inDataExchange()`-Kommandos benötigte interne
+  `_inListedTag`-Variable wird dabei korrekt gesetzt (das war der
+  ursprüngliche Grund, `inListPassiveTarget()` überhaupt zu brauchen). Die
+  UID fürs Display kommt jetzt aus der DESFire-eigenen `GetVersion`-Antwort
+  (`desfireGetVersion()`), nicht mehr aus `readPassiveTargetID()`.
 - **NTP-SYNC-Button scheint nichts zu tun, obwohl WLAN-Zugangsdaten
   korrekt eingetragen sind:** `syncFromNtp()` loggte Erfolg/Fehlschlag
   bisher nur über Serial — auf dem Display war der Button-Flash (grün,

@@ -29,10 +29,14 @@
 //   1. In Adafruit_PN532.h:  #define PN532_PACKBUFFSIZ 64   ->  255
 //   2. In Adafruit_PN532.cpp, inDataExchange(): Timeout 1000 -> 5000 (ms)
 //
-// Dieser Test deckt NUR die Basis-Verbindung ab (Firmware-Version +
-// UID-Read per readPassiveTargetID()). Fuer den vollen DESFire-Lebenszyklus
-// waere stattdessen inListPassiveTarget() zur Kartenaktivierung noetig --
-// siehe README.md, bewusst nicht Teil dieses Basis-Funktionstests.
+// Kartenerkennung + -aktivierung laeuft NUR ueber inListPassiveTarget()
+// (kein zusaetzlicher readPassiveTargetID()-Aufruf davor/danach) -- beide
+// senden dasselbe native InListPassiveTarget-Kommando (0x4A), und ein
+// zweiter Aufruf direkt nach einem bereits erfolgreichen ersten schlaegt an
+// echter Hardware regelmaessig fehl, weil die Karte dann schon aktiviert
+// ist und auf eine erneute Anticollision/Select-Sequenz nicht mehr
+// antwortet (siehe README.md). Die UID kommt stattdessen aus
+// desfireGetVersion() (siehe desfireDeepRead()).
 
 #include <Wire.h>
 #include <WiFi.h>
@@ -437,6 +441,7 @@ void desfireDeepRead() {
 
   DesfireVersion ver;
   if (!desfireGetVersion(ver)) {
+    snprintf(uidMsg, sizeof(uidMsg), "Karte erkannt (kein DESFire / Kommunikationsfehler)");
     snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Kein DESFire (GetVersion fehlgeschlagen)");
     if (haveLog) {
       log.println("GetVersion fehlgeschlagen -- keine DESFire-Karte oder Kommunikationsfehler.");
@@ -444,6 +449,11 @@ void desfireDeepRead() {
     }
     return;
   }
+
+  // UID kommt aus der DESFire-eigenen GetVersion-Antwort, nicht aus einem
+  // separaten readPassiveTargetID()-Aufruf (siehe Kopfkommentar der Datei).
+  snprintf(uidMsg, sizeof(uidMsg), "Karte erkannt, UID: %02X %02X %02X %02X %02X %02X %02X",
+           ver.uid[0], ver.uid[1], ver.uid[2], ver.uid[3], ver.uid[4], ver.uid[5], ver.uid[6]);
 
   if (haveLog) {
     log.printf("HW: Vendor=0x%02X Type=0x%02X SubType=0x%02X Version=%u.%u StorageSize=0x%02X Protocol=0x%02X\n",
@@ -734,39 +744,20 @@ void loop() {
     updateSendInfo();
   }
 
-  // Kurzer Poll-Versuch (100ms Timeout in readPassiveTargetID()) -- danach
-  // 1s Entprellen, damit eine aufliegende Karte nicht staendig neu
-  // "erkannt" wird. 100ms statt der urspruenglich probierten 10ms: DESFire-
-  // Karten antworten auf die ISO14443A-Anticollision/Select-Sequenz
-  // teils spuerbar langsamer als einfache Mifare-Classic-Karten, und
-  // Software-SPI (statt Hardware-SPI) fuegt zusaetzliche Kommunikations-
-  // Latenz hinzu -- mit 10ms lief das readPassiveTargetID() bei DESFire-
-  // Karten offenbar regelmaessig in den Timeout, ohne dass ueberhaupt ein
-  // Lesevorgang sichtbar war ("es passiert nichts beim Scannen").
+  // Poll-Versuch, danach 1s Entprellen, damit eine aufliegende Karte nicht
+  // staendig neu "erkannt" wird. NUR EIN Aufruf von inListPassiveTarget()
+  // fuer Erkennung UND Aktivierung -- ein zusaetzlicher
+  // readPassiveTargetID()-Aufruf davor (frueherer Ansatz) sendet dasselbe
+  // native InListPassiveTarget-Kommando ein zweites Mal an eine schon
+  // aktivierte Karte und schlug an echter Hardware regelmaessig fehl
+  // ("DESFire: inListPassiveTarget() fehlgeschlagen" trotz zuvor
+  // erfolgreich gelesener UID -- siehe Kopfkommentar der Datei).
   if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
     lastPn532AttemptMs = now;
     if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
-      uint8_t uid[7];
-      uint8_t uidLength;
-      if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100)) {
-        char uidHex[24] = {0};
-        for (uint8_t i = 0; i < uidLength; i++) {
-          char byteStr[4];
-          snprintf(byteStr, sizeof(byteStr), "%02X ", uid[i]);
-          strcat(uidHex, byteStr);
-        }
-        snprintf(uidMsg, sizeof(uidMsg), "Karte erkannt, UID: %s", uidHex);
+      if (nfc.inListPassiveTarget()) {
         buzzerBeep(80);
-
-        // readPassiveTargetID() setzt NICHT die interne _inListedTag-
-        // Variable, die inDataExchange() (fuer die DESFire-Kommandos in
-        // desfireDeepRead()) braucht -- dafuer muss die Karte zusaetzlich
-        // per inListPassiveTarget() aktiviert werden (siehe README.md).
-        if (nfc.inListPassiveTarget()) {
-          desfireDeepRead();
-        } else {
-          snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "DESFire: inListPassiveTarget() fehlgeschlagen");
-        }
+        desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
         updateUidInfo();
         lastUidReadMs = now;
       }
