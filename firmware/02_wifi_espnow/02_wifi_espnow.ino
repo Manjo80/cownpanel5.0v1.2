@@ -85,10 +85,10 @@ bool inside(const Button &b, int32_t x, int32_t y) {
   return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
-// Titel + Buttons -- aendert sich nur, wenn sich die Hintergrundfarbe
-// aendert (Tap auf freie Flaeche). Getrennt von updateStatusArea(), damit
-// der alle 2s wiederkehrende ESP-NOW-Sendezyklus NICHT den ganzen Schirm
-// loescht und neu aufbaut (das war das sichtbare "Flackern").
+// Titel + eigene MAC-Adresse + Buttons -- aendert sich nur, wenn sich die
+// Hintergrundfarbe aendert (Tap auf freie Flaeche). Die MAC-Adresse steht
+// bereits vor esp_now_init() fest und aendert sich zur Laufzeit nie, daher
+// gehoert sie hierher statt in eine der beiden Update-Funktionen unten.
 void drawStaticParts() {
   canvas.fillScreen(bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
@@ -99,24 +99,24 @@ void drawStaticParts() {
   canvas.setTextSize(2);
   canvas.println("Stage 2: Display+Touch+Buzzer + WLAN/ESP-NOW");
 
+  canvas.setCursor(20, 90);
+  canvas.print("Eigene MAC: ");
+  canvas.println(WiFi.macAddress());
+
   drawButton(btnBeep, TFT_DARKGREY);
   drawButton(btnBrightUp, TFT_DARKGREY);
   drawButton(btnBrightDn, TFT_DARKGREY);
 }
 
-// Nur der WLAN/ESP-NOW-Statusbereich (zwischen Titel und Buttons) wird
-// geleert und neu gezeichnet -- das ist der einzige Teil, der sich bei
-// jeder gesendeten/empfangenen Nachricht aendert.
-void updateStatusArea() {
-  canvas.fillRect(0, 90, LCD_WIDTH, 290, bgColors[bgIndex]);
+// Nur Sendezaehler + letzter Sendestatus -- wird ausschliesslich vom
+// 2s-Sendezyklus in loop() aufgerufen, NICHT bei jedem Empfang (dafuer
+// gibt es updateReceivedInfo() unten, mit eigenem Bildschirmbereich).
+void updateSendInfo() {
+  canvas.fillRect(0, 120, LCD_WIDTH, 70, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
   canvas.setTextSize(2);
 
   canvas.setTextColor(TFT_WHITE);
-  canvas.setCursor(20, 100);
-  canvas.print("Eigene MAC: ");
-  canvas.println(WiFi.macAddress());
-
   canvas.setCursor(20, 130);
   canvas.printf("ESP-NOW gesendet: %lu\n", (unsigned long)outgoing.counter);
 
@@ -128,9 +128,16 @@ void updateStatusArea() {
     canvas.setTextColor(TFT_LIGHTGREY);
     canvas.println("Letzter Sendestatus: (noch keiner)");
   }
+}
 
-  canvas.setCursor(20, 200);
+// Nur die zuletzt empfangene Nachricht -- wird ausschliesslich aus
+// onDataRecv() aufgerufen, NICHT beim eigenen Senden.
+void updateReceivedInfo() {
+  canvas.fillRect(0, 195, LCD_WIDTH, 185, bgColors[bgIndex]);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextSize(2);
   canvas.setTextColor(TFT_GREENYELLOW);
+  canvas.setCursor(20, 200);
   if (haveReceived) {
     canvas.printf("Empfangen von %02X:%02X:%02X:%02X:%02X:%02X:\n",
                   lastSrcMac[0], lastSrcMac[1], lastSrcMac[2],
@@ -157,7 +164,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   memcpy(lastSrcMac, info->src_addr, 6);
   haveReceived = true;
   buzzerBeep(60);
-  updateStatusArea();
+  updateReceivedInfo();
 }
 
 void setup() {
@@ -224,7 +231,8 @@ void setup() {
   snprintf(outgoing.text, sizeof(outgoing.text), "Hallo von %s", WiFi.macAddress().c_str());
 
   drawStaticParts();
-  updateStatusArea();
+  updateSendInfo();
+  updateReceivedInfo();
   Serial.println("Setup fertig.");
 }
 
@@ -234,7 +242,7 @@ void loop() {
     lastSendMs = now;
     outgoing.counter++;
     esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
-    updateStatusArea();
+    updateSendInfo();
   }
 
   int32_t x, y;
@@ -259,7 +267,8 @@ void loop() {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticParts();
-      updateStatusArea();
+      updateSendInfo();
+      updateReceivedInfo();
     }
 
     delay(150); // einfaches Debounce
