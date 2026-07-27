@@ -129,7 +129,11 @@ void redrawScreen() {
   drawButton(btnBrightDn, TFT_DARKGREY);
 }
 
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+// Core-Versions-abhaengig (siehe README.md Abschnitt 15, Punkt 7): dieser
+// PlatformIO-Toolchain-Stand erwartet fuer esp_now_send_cb_t
+// wifi_tx_info_t* statt des aelteren uint8_t* mac_addr. Bei einem
+// Core-Wechsel ggf. wieder auf "const uint8_t *mac_addr" zuruecksetzen.
+void onDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
   lastSendOk = (status == ESP_NOW_SEND_SUCCESS);
   haveSendResult = true;
 }

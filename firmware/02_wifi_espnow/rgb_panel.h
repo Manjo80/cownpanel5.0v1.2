@@ -63,7 +63,8 @@ inline bool rgbPanelInit() {
   panel_config.bits_per_pixel = 16;
   panel_config.num_fbs = 1;
   panel_config.bounce_buffer_size_px = LCD_WIDTH * RGB_BOUNCE_BUFFER_LINES;
-  panel_config.psram_trans_align = 64;
+  // psram_trans_align entfernt: in neueren ESP-IDF-Versionen als deprecated
+  // markiert (durch ein internes Feld in einer Union ersetzt); Default reicht.
 
   panel_config.hsync_gpio_num = PIN_LCD_HSYNC;
   panel_config.vsync_gpio_num = PIN_LCD_VSYNC;
