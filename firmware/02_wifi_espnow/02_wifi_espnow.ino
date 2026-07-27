@@ -85,9 +85,12 @@ bool inside(const Button &b, int32_t x, int32_t y) {
   return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
-void redrawScreen() {
+// Titel + Buttons -- aendert sich nur, wenn sich die Hintergrundfarbe
+// aendert (Tap auf freie Flaeche). Getrennt von updateStatusArea(), damit
+// der alle 2s wiederkehrende ESP-NOW-Sendezyklus NICHT den ganzen Schirm
+// loescht und neu aufbaut (das war das sichtbare "Flackern").
+void drawStaticParts() {
   canvas.fillScreen(bgColors[bgIndex]);
-
   canvas.setTextDatum(lgfx::top_left);
   canvas.setTextColor(TFT_WHITE);
   canvas.setTextSize(3);
@@ -96,6 +99,20 @@ void redrawScreen() {
   canvas.setTextSize(2);
   canvas.println("Stage 2: Display+Touch+Buzzer + WLAN/ESP-NOW");
 
+  drawButton(btnBeep, TFT_DARKGREY);
+  drawButton(btnBrightUp, TFT_DARKGREY);
+  drawButton(btnBrightDn, TFT_DARKGREY);
+}
+
+// Nur der WLAN/ESP-NOW-Statusbereich (zwischen Titel und Buttons) wird
+// geleert und neu gezeichnet -- das ist der einzige Teil, der sich bei
+// jeder gesendeten/empfangenen Nachricht aendert.
+void updateStatusArea() {
+  canvas.fillRect(0, 90, LCD_WIDTH, 290, bgColors[bgIndex]);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextSize(2);
+
+  canvas.setTextColor(TFT_WHITE);
   canvas.setCursor(20, 100);
   canvas.print("Eigene MAC: ");
   canvas.println(WiFi.macAddress());
@@ -123,10 +140,6 @@ void redrawScreen() {
   } else {
     canvas.println("Noch keine ESP-NOW-Nachricht empfangen.");
   }
-
-  drawButton(btnBeep, TFT_DARKGREY);
-  drawButton(btnBrightUp, TFT_DARKGREY);
-  drawButton(btnBrightDn, TFT_DARKGREY);
 }
 
 // Core-Versions-abhaengig (siehe README.md Abschnitt 15, Punkt 7): dieser
@@ -144,7 +157,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   memcpy(lastSrcMac, info->src_addr, 6);
   haveReceived = true;
   buzzerBeep(60);
-  redrawScreen();
+  updateStatusArea();
 }
 
 void setup() {
@@ -210,7 +223,8 @@ void setup() {
   outgoing.counter = 0;
   snprintf(outgoing.text, sizeof(outgoing.text), "Hallo von %s", WiFi.macAddress().c_str());
 
-  redrawScreen();
+  drawStaticParts();
+  updateStatusArea();
   Serial.println("Setup fertig.");
 }
 
@@ -220,7 +234,7 @@ void loop() {
     lastSendMs = now;
     outgoing.counter++;
     esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
-    redrawScreen();
+    updateStatusArea();
   }
 
   int32_t x, y;
@@ -244,7 +258,8 @@ void loop() {
     } else if (y < 380) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
-      redrawScreen();
+      drawStaticParts();
+      updateStatusArea();
     }
 
     delay(150); // einfaches Debounce
