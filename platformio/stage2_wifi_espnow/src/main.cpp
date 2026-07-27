@@ -104,11 +104,17 @@ void drawStaticParts() {
   drawButton(btnBrightDn, TFT_DARKGREY);
 }
 
+// Bereichsgrenzen der beiden Update-Funktionen -- an einer Stelle definiert,
+// damit das fillRect() hier drin und der zugehoerige rgbPanelFlushRect()-
+// Aufruf in loop()/onDataRecv() garantiert denselben Bereich benutzen.
+const int SEND_INFO_Y = 120, SEND_INFO_H = 70;
+const int RECV_INFO_Y = 195, RECV_INFO_H = 185;
+
 // Nur Sendezaehler + letzter Sendestatus -- wird ausschliesslich vom
 // 2s-Sendezyklus in loop() aufgerufen, NICHT bei jedem Empfang (dafuer
 // gibt es updateReceivedInfo() unten, mit eigenem Bildschirmbereich).
 void updateSendInfo() {
-  canvas.fillRect(0, 120, LCD_WIDTH, 70, bgColors[bgIndex]);
+  canvas.fillRect(0, SEND_INFO_Y, LCD_WIDTH, SEND_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
   canvas.setTextSize(2);
 
@@ -129,7 +135,7 @@ void updateSendInfo() {
 // Nur die zuletzt empfangene Nachricht -- wird ausschliesslich aus
 // onDataRecv() aufgerufen, NICHT beim eigenen Senden.
 void updateReceivedInfo() {
-  canvas.fillRect(0, 195, LCD_WIDTH, 185, bgColors[bgIndex]);
+  canvas.fillRect(0, RECV_INFO_Y, LCD_WIDTH, RECV_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
   canvas.setTextSize(2);
   canvas.setTextColor(TFT_GREENYELLOW);
@@ -161,7 +167,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   haveReceived = true;
   buzzerBeep(60);
   updateReceivedInfo();
-  rgbPanelFlush(g_canvasBuffer);
+  rgbPanelFlushRect(g_canvasBuffer, 0, RECV_INFO_Y, LCD_WIDTH, RECV_INFO_H);
 }
 
 void setup() {
@@ -249,33 +255,33 @@ void loop() {
     outgoing.counter++;
     esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
     updateSendInfo();
-    rgbPanelFlush(g_canvasBuffer);
+    rgbPanelFlushRect(g_canvasBuffer, 0, SEND_INFO_Y, LCD_WIDTH, SEND_INFO_H);
   }
 
   int32_t x, y;
   if (touchStandaloneGetXY(&x, &y)) {
     if (inside(btnBeep, x, y)) {
       drawButton(btnBeep, TFT_GREEN);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBeep.x, btnBeep.y, btnBeep.w, btnBeep.h);
       buzzerBeep(150);
       drawButton(btnBeep, TFT_DARKGREY);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBeep.x, btnBeep.y, btnBeep.w, btnBeep.h);
     } else if (inside(btnBrightUp, x, y)) {
       backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
       setBacklightPercent(backlightPercent);
       drawButton(btnBrightUp, TFT_GREEN);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightUp.x, btnBrightUp.y, btnBrightUp.w, btnBrightUp.h);
       delay(80);
       drawButton(btnBrightUp, TFT_DARKGREY);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightUp.x, btnBrightUp.y, btnBrightUp.w, btnBrightUp.h);
     } else if (inside(btnBrightDn, x, y)) {
       backlightPercent = (backlightPercent >= 10) ? backlightPercent - 10 : 0;
       setBacklightPercent(backlightPercent);
       drawButton(btnBrightDn, TFT_GREEN);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightDn.x, btnBrightDn.y, btnBrightDn.w, btnBrightDn.h);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightDn.x, btnBrightDn.y, btnBrightDn.w, btnBrightDn.h);
     } else if (y < 380) {
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticParts();
