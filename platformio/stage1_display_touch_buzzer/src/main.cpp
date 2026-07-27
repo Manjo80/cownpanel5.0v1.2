@@ -103,6 +103,16 @@ void setup() {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
   delay(50);
 
+  // Zusaetzlich zur 120ms-Adress-Auswahl-Sequenz (gt911PowerOnSequence())
+  // braucht der GT911-Chip selbst nach einem ECHTEN Stromlos-Start noch
+  // Zeit fuer sein eigenes Power-On-Booting, bevor er auf dem I2C-Bus
+  // ueberhaupt antwortet. Nach einem Reset-Knopf-Druck laeuft der Chip
+  // bereits, daher faellt das dort nicht auf.
+  const uint32_t GT911_READY_DELAY_MS = 600;
+  Serial.printf("Warte %lums auf GT911-Boot (nur bei echtem Stromlos-Start noetig) ...\n",
+                (unsigned long)GT911_READY_DELAY_MS);
+  delay(GT911_READY_DELAY_MS);
+
   uint8_t gtAddr = probeGT911Address();
   Serial.printf("GT911 gefunden auf Adresse 0x%02X\n", gtAddr);
   touchStandaloneConfig(gtAddr);
