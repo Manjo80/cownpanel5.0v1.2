@@ -259,7 +259,28 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   zurück, und der Button leuchtet bei einem Fehlschlag kurz **rot** auf,
   bevor er auf grau zurückspringt — bei Erfolg direkt grau wie gewohnt.
   Für die genaue Fehlerursache (Verbindung vs. Server nicht erreichbar)
-  weiterhin den Serial Monitor mitlaufen lassen.
+  weiterhin den Serial Monitor mitlaufen lassen. Seit Stage 5 zusätzlich
+  eine WLAN-IP-Zeile im Display (`updateWifiInfo()`, unter der UID/DESFire-
+  Zusammenfassung) — die wird nach jedem NTP-SYNC-Versuch aktualisiert und
+  zeigt an, ob `WiFi.begin()` überhaupt eine IP bekommen hat, auch wenn der
+  anschließende NTP-Request selbst fehlschlägt.
+- **Buttons reagieren erst nach 1-2 Sekunden gedrückt halten:** Der
+  PN532-Poll rief `nfc.inListPassiveTarget()` ohne explizites Timeout auf
+  (Standardvorgabe der Adafruit-Bibliothek: 1000 ms). Ohne Karte auf dem
+  Leser blockierte das bei **jedem** 300-ms-Poll-Zyklus bis zu eine volle
+  Sekunde, bevor die Funktion `false` zurückgab — und die Touch-Abfrage
+  weiter unten in `loop()` kommt danach erst wieder dran. Damit wurde die
+  Touch-Abfrage effektiv nur noch alle 1–1,3 Sekunden ausgeführt, ein
+  Loslassen des Fingers vor dem nächsten `loop()`-Durchlauf wurde schlicht
+  verpasst. Fix: `nfc.inListPassiveTarget(PN532_MIFARE_ISO14443A, 100)` mit
+  explizit 100 ms Timeout (reicht einer echten, aufliegenden Karte
+  weiterhin, siehe der ähnliche `readPassiveTargetID()`-Fix weiter oben).
+- **Touch-Debug-Ausgabe / `syncFromNtp()`s "."-Fortschrittsausgabe
+  verlangsamen den Sketch spürbar:** ESP32-S3-USB-CDC-`Serial` blockiert,
+  sobald der interne Sendepuffer vollläuft und niemand ihn ausliest (kein
+  Serial Monitor verbunden). Beide Stellen prüfen jetzt vorher
+  `if (Serial)` (liefert bei USB-CDC nur `true`, wenn tatsächlich ein Host
+  verbunden ist) und überspringen die Ausgabe sonst, statt zu blockieren.
 
 ## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
 
