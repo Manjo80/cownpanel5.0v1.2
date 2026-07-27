@@ -186,7 +186,10 @@ const int UID_INFO_Y = 230, UID_INFO_H = 40;
 void drawButton(const Button &b, uint16_t fill) {
   canvas.fillRoundRect(b.x, b.y, b.w, b.h, 8, fill);
   canvas.drawRoundRect(b.x, b.y, b.w, b.h, 8, TFT_WHITE);
-  canvas.setTextColor(TFT_WHITE);
+  // Schwarz statt Weiss -- auf dem hellen (TFT_DARKGREY wirkt auf diesem
+  // Panel deutlich heller als am Schreibtisch erwartet) bzw. gruenen
+  // Button-Fuellgrund war weisse Schrift kaum lesbar.
+  canvas.setTextColor(TFT_BLACK);
   canvas.setTextSize(2);
   canvas.setTextDatum(lgfx::middle_center);
   canvas.drawString(b.label, b.x + b.w / 2, b.y + b.h / 2);
@@ -224,9 +227,10 @@ void drawStaticParts() {
   canvas.setCursor(12, 12);
   canvas.println("CrowPanel Advance 5.0");
   // Hochformat ist nur 480px breit statt vormals 800px -- laengere
-  // Zeilen (Untertitel, MAC-Adresse) laufen bei textSize(2) aus dem
-  // Bild, deshalb hier textSize(1).
-  canvas.setTextSize(1);
+  // Zeilen (Untertitel, MAC-Adresse) laufen bei textSize(2) aus dem Bild,
+  // deshalb hier textSize(1.5) statt (2) (LovyanGFX erlaubt Fliesskomma-
+  // Groessen, nicht nur ganze Zahlen wie klassisches Adafruit_GFX).
+  canvas.setTextSize(1.5);
   canvas.setCursor(12, 40);
   canvas.println("Stage 5: PN532 NFC + SD + RTC + WLAN/ESP-NOW");
 
@@ -246,7 +250,7 @@ void drawStaticParts() {
 void updateSdInfo() {
   canvas.fillRect(0, SD_INFO_Y, canvas.width(), SD_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(1);
+  canvas.setTextSize(1.5);
   canvas.setTextColor(sdStatusColor);
   canvas.setCursor(12, SD_INFO_Y + 2);
   canvas.print(sdStatusMsg);
@@ -277,7 +281,7 @@ void updateRtcInfo() {
 void updatePn532Info() {
   canvas.fillRect(0, PN532_INFO_Y, canvas.width(), PN532_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(1);
+  canvas.setTextSize(1.5);
   canvas.setTextColor(pn532StatusColor);
   canvas.setCursor(12, PN532_INFO_Y + 2);
   canvas.print(pn532StatusMsg);
@@ -288,7 +292,7 @@ void updatePn532Info() {
 void updateSendInfo() {
   canvas.fillRect(0, SEND_INFO_Y, canvas.width(), SEND_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(1);
+  canvas.setTextSize(1.5);
 
   canvas.setTextColor(TFT_WHITE);
   canvas.setCursor(12, SEND_INFO_Y + 2);
@@ -309,7 +313,7 @@ void updateSendInfo() {
 void updateReceivedInfo() {
   canvas.fillRect(0, RECV_INFO_Y, canvas.width(), RECV_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(1);
+  canvas.setTextSize(1.5);
   canvas.setTextColor(TFT_GREENYELLOW);
   canvas.setCursor(12, RECV_INFO_Y + 2);
   if (haveReceived) {
@@ -329,7 +333,7 @@ void updateReceivedInfo() {
 void updateUidInfo() {
   canvas.fillRect(0, UID_INFO_Y, canvas.width(), UID_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(1);
+  canvas.setTextSize(1.5);
   canvas.setTextColor(TFT_GREENYELLOW);
   canvas.setCursor(12, UID_INFO_Y + 2);
   canvas.print(uidMsg);
@@ -820,7 +824,14 @@ void loop() {
 
   int32_t x, y;
   if (touchStandaloneGetXY(&x, &y)) {
+    int32_t rawXDbg = x, rawYDbg = y;
     rotateTouchToLogical(x, y);
+    // Diagnose-Ausgabe fuer die Rotations-Transformation -- bei einem
+    // Touch-Treffer-Bug (Buttons reagieren nicht/an der falschen Stelle)
+    // zeigt der Vergleich Rohkoordinate vs. transformierte Koordinate
+    // sofort, ob/wie die Formel in rotateTouchToLogical() nicht zur
+    // tatsaechlichen Panel-Orientierung passt.
+    Serial.printf("Touch: roh=(%d,%d) -> gedreht=(%d,%d)\n", rawXDbg, rawYDbg, x, y);
     if (inside(btnSetCompile, x, y)) {
       drawButton(btnSetCompile, TFT_GREEN);
       setRtcFromCompileTime();
