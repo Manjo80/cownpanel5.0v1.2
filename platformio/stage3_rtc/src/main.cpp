@@ -13,6 +13,7 @@
 // ESP-NOW braucht dafuer weiterhin KEINE AP-Verbindung -- WIFI_STA-Modus
 // ohne WiFi.begin() reicht, NTP-SYNC verbindet nur kurz bei Tastendruck.
 
+#include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
