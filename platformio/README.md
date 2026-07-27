@@ -81,6 +81,9 @@ zugrundeliegende ESP-IDF-Konfiguration einspeist.
   nötigen Patches (siehe `firmware/README.md` Abschnitt 3) — die müssen
   nach dem ersten Build manuell in
   `.pio/libdeps/advance-hmi/Adafruit PN532/` nachgetragen werden.
-- `include/desfire.h` nutzt `mbedtls/des.h`, `mbedtls/aes.h` und
-  `esp_random.h` — alles Teil des ESP-IDF-Kerns, keine zusätzliche
-  `lib_deps`-Zeile nötig.
+- `include/desfire.h` nutzt `mbedtls/aes.h` (AES-Authentifizierung) und
+  `esp_random.h` — beides Teil des ESP-IDF-Kerns, keine zusätzliche
+  `lib_deps`-Zeile nötig. DES/2K3DES ist dagegen komplett selbst
+  implementiert (kein `mbedtls/des.h`), weil `framework=arduino` mbedtls
+  als vorkompiliertes Binary ausliefert, in dem `mbedtls_des3_*` fehlt —
+  Details siehe `firmware/README.md` Abschnitt 8.

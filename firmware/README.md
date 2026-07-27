@@ -292,17 +292,19 @@ App(s), 1 authentifiziert, siehe SD-Log`).
   "Karte hat andere Schlüssel" zu unterscheiden.
 
 **Build-Fehler `undefined reference to mbedtls_des3_init` (u. ä.):**
-ESP-IDFs mbedtls-Komponente kompiliert DES/2K3DES standardmäßig NICHT mit
-ein (als veraltete Cipher betrachtet, spart Flash) — nur
-`mbedtls_aes_*` (für die AES-Authentifizierung) ist Teil der
-Standardkonfiguration. Für PlatformIO ist das bereits behoben:
-`platformio/stage5_pn532_spi/sdkconfig.defaults` setzt
-`CONFIG_MBEDTLS_DES_C=y`. **Arduino-IDE-Nutzer:** der vorkompilierte
-ESP32-Core bringt mbedtls bereits fertig gebaut mit — ob `mbedtls_des3_*`
-darin enthalten ist, hängt von der jeweiligen Core-Version ab und lässt
-sich nicht einfach per Menü umschalten. Bekommst du denselben Linker-Fehler
-in der Arduino IDE, ist PlatformIO (wo die Kconfig-Option zur Verfügung
-steht) hier der zuverlässigere Weg.
+Trat früher auf, weil `desfire.h` für die 2K3DES-Authentifizierung
+`mbedtls_des3_*` nutzte. Bei `framework=arduino` wird die mbedtls-Komponente
+aber als fertig **vorkompiliertes Binary** mit dem Framework-Paket
+ausgeliefert, nicht aus Quellcode neu gebaut — eine `CONFIG_MBEDTLS_DES_C=y`
+in `sdkconfig.defaults` (wie in einer früheren Version dieser Datei
+empfohlen) hat darauf **keine Wirkung**, das Linken gegen `mbedtls_des3_*`
+schlägt unabhängig davon immer fehl, weil DES/2K3DES schlicht nicht Teil des
+vorkompilierten Binaries ist (`mbedtls_aes_*` für die AES-Authentifizierung
+dagegen schon). Deshalb implementiert `desfire.h` DES/2K3DES inzwischen
+**komplett selbst** (Standard-FIPS-46-3-Tabellen und -Algorithmus, siehe
+Kopfkommentar der Datei) und braucht `mbedtls/des.h` gar nicht mehr — der
+Fehler kann damit weder in PlatformIO noch in der Arduino IDE mehr
+auftreten, da beide Toolchains dieselbe `desfire.h` verwenden.
 
 ## 9. Ausblick — nicht Teil dieser fünf Stages
 
