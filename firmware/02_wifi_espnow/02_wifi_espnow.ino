@@ -68,6 +68,18 @@ uint8_t lastSrcMac[6] = {0};
 bool lastSendOk = false;
 bool haveSendResult = false;
 uint32_t lastSendMs = 0;
+
+// onDataRecv() laeuft NICHT im loop()-Task, sondern im WiFi/ESP-NOW-System-
+// Task von Arduino-ESP32 -- ein anderer FreeRTOS-Task als loop(). canvas
+// (LGFX_Sprite) und der I2C-Bus (Wire, fuer buzzerBeep) sind nicht dafuer
+// gebaut, von zwei Tasks gleichzeitig benutzt zu werden: faellt der Empfang
+// eines ESP-NOW-Pakets genau in einen laufenden Touch-/Sende-Redraw in
+// loop(), entstehen daraus die "verwaschenen"/doppelten Bildfehler, die nur
+// auftreten, sobald tatsaechlich Nachrichten ankommen. Deshalb kopiert
+// onDataRecv() nur die Daten und setzt dieses Flag -- Zeichnen und Buzzer
+// passieren ausschliesslich in loop(), im selben Task wie alle anderen
+// canvas-Zugriffe.
+volatile bool recvPending = false;
 const uint32_t SEND_INTERVAL_MS = 2000;
 
 uint8_t broadcastAddr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
@@ -163,8 +175,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   memcpy(&lastReceived, data, sizeof(espnow_message_t));
   memcpy(lastSrcMac, info->src_addr, 6);
   haveReceived = true;
-  buzzerBeep(60);
-  updateReceivedInfo();
+  recvPending = true;
 }
 
 void setup() {
@@ -199,6 +210,18 @@ void setup() {
   setBacklightPercent(backlightPercent);
 
   WiFi.mode(WIFI_STA);
+
+  // Direkt nach WiFi.mode() liefert WiFi.macAddress() auf manchen Boards bei
+  // echtem Stromlos-Start noch "00:00:00:00:00:00" (WLAN-Treiber intern noch
+  // nicht ganz bereit) -- kurz auf eine echte Adresse warten, sonst landet
+  // die Nullen-MAC dauerhaft in outgoing.text (sichtbar beim Empfaenger als
+  // "Hallo von 00:00:00:00:00:00").
+  {
+    uint32_t macWaitStart = millis();
+    while (WiFi.macAddress() == "00:00:00:00:00:00" && millis() - macWaitStart < 2000) {
+      delay(50);
+    }
+  }
 #ifdef USE_WIFI_STA_CONNECT
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Verbinde mit WLAN");
@@ -237,6 +260,14 @@ void setup() {
 }
 
 void loop() {
+  // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/gepiept -- siehe
+  // Kommentar bei recvPending oben.
+  if (recvPending) {
+    recvPending = false;
+    buzzerBeep(60);
+    updateReceivedInfo();
+  }
+
   uint32_t now = millis();
   if (now - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = now;
