@@ -1,13 +1,21 @@
 # PlatformIO-Variante — CrowPanel Advance 5.0
 
-Grund für diesen Ordner: Die Arduino-IDE-Boardverwaltung (Core "esp32" von
-Espressif, Version 3.3.11) kompiliert das PSRAM fest mit **80 MHz**. Elecrows
-eigenes, offizielles Beispiel für dieses Board (V1.2/V1.3) verlangt aber
-**120 MHz** (`CONFIG_SPIRAM_SPEED_120M`) — das lässt sich nur über eine
-andere, gepatchte PlatformIO-Plattform erreichen, nicht über ein
-Arduino-IDE-Menü. Diese Diskrepanz war der wahrscheinlichste Kandidat für das
-lang verfolgte Problem mit schwarzem/gestörtem Display (siehe
-`firmware/README.md` und die Projektdokumentation).
+Primäre Entwicklungsumgebung für dieses Projekt (statt Arduino IDE), aus zwei Gründen:
+
+1. Die Arduino-IDE-Boardverwaltung kompiliert PSRAM fest mit 80 MHz, nicht
+   den vom Board-Hersteller vorgesehenen 120 MHz — nur über die hier
+   verlinkte, gepatchte PlatformIO-Plattform + `sdkconfig.defaults.esp32s3`
+   erreichbar (siehe unten). Hat sich am Ende NICHT als Ursache der
+   Bildstreifen herausgestellt, ist aber trotzdem die korrekte Taktung fürs
+   Board und bleibt deshalb aktiv.
+2. PlatformIO verwaltet Bibliotheken automatisch pro Projekt (kein manuelles
+   Kopieren in einen globalen `libraries`-Ordner wie bei der Arduino IDE),
+   was besonders bei den Patches/Versionsvorgaben aus früheren Gesprächen
+   half.
+
+Die eigentliche Ursache für die hartnäckigen Bildstreifen war ein Bounce-
+Buffer-Problem (siehe `firmware/README.md`) — jeder Stage-Ordner nutzt
+deshalb Espressifs `esp_lcd_panel_rgb`-Treiber statt LovyanGFX's `Bus_RGB`.
 
 ## Voraussetzungen
 
@@ -15,47 +23,48 @@ lang verfolgte Problem mit schwarzem/gestörtem Display (siehe
 2. In VS Code: Extensions (die vier Quadrate in der Seitenleiste) → nach
    **"PlatformIO IDE"** suchen → installieren. Danach erscheint links ein
    neues PlatformIO-Symbol (Ameisenkopf).
-3. In VS Code: **Datei → Ordner öffnen** → `platformio/stage1_display_touch_buzzer`
-   auswählen (NICHT das gesamte Repo — jedes PlatformIO-Projekt ist ein
-   eigener Ordner mit eigener `platformio.ini`).
+3. In VS Code: **Datei → Ordner öffnen** → den jeweiligen Stage-Ordner
+   auswählen (z. B. `platformio/stage2_wifi_espnow`) — NICHT das gesamte
+   Repo. Jedes PlatformIO-Projekt ist ein eigener Ordner mit eigener
+   `platformio.ini`.
 
 ## Bauen und hochladen
 
 Über die PlatformIO-Seitenleiste (Ameisenkopf-Symbol) → "PROJECT TASKS" →
 `advance-hmi` → **Build** (Häkchen-Symbol) und **Upload** (Pfeil-Symbol) in
-der blauen Statusleiste unten. Serieller Monitor: Steckdosen-Symbol daneben,
-oder PlatformIO: Monitor.
+der blauen Statusleiste unten. **Wichtig: Build allein schreibt nichts aufs
+Board — immer Upload (Pfeil) klicken, nicht nur das Häkchen.** Serieller
+Monitor: Steckdosen-Symbol daneben, oder PlatformIO: Monitor.
 
-Bibliotheken (`lovyan03/LovyanGFX@1.2.26`) werden beim ersten Build
-automatisch heruntergeladen — kein manuelles Kopieren in einen
-`libraries`-Ordner nötig wie bei der Arduino IDE.
+Falls PlatformIO Core selbst beschädigt ist (`ModuleNotFoundError: No
+module named 'click'` o. ä.): VS Code schließen, Ordner
+`C:\Users\<Name>\.platformio\penv` löschen, VS Code neu öffnen — die
+Extension baut die Python-Umgebung automatisch neu auf.
 
-## Struktur
+## Stages
+
+| Ordner | Entspricht | Nutzt esp_lcd_panel_rgb? |
+|---|---|---|
+| `stage1_display_touch_buzzer/` | `firmware/01_display_touch_buzzer/` | Ja — an echter Hardware verifiziert |
+| `stage2_wifi_espnow/` | `firmware/02_wifi_espnow/` | Ja |
+
+Jeder Stage-Ordner enthält:
 
 | Datei/Ordner | Inhalt |
 |---|---|
-| `stage1_display_touch_buzzer/platformio.ini` | Elecrows offizielle Konfiguration (Platform, Board, LovyanGFX-Version) |
-| `stage1_display_touch_buzzer/boards/ESP32-S3-WROOM-1-N16R8.json` | **Notwendig** — eigene Board-Definition, ohne die PlatformIO die Board-ID nicht kennt ("UnknownBoard") |
-| `stage1_display_touch_buzzer/sdkconfig.defaults.esp32s3` | **Die eigentlich wichtige Datei** — setzt `CONFIG_SPIRAM_SPEED_120M` als echte ESP-IDF-Kconfig-Option (nicht nur als Compiler-Define), dazu Cache-Line-Groesse und Anti-Tearing (`CONFIG_EXAMPLE_LVGL_PORT_AVOID_TEAR_ENABLE`) |
-| `stage1_display_touch_buzzer/sdkconfig.defaults` | Fast leer (Elecrows Original enthaelt hier nur LVGL-Einstellungen, die Stage 1 nicht braucht); muss aber als Datei existieren |
-| `stage1_display_touch_buzzer/partitions.csv` | 1:1 aus Elecrows offiziellem PlatformIO-Beispiel übernommen |
-| `stage1_display_touch_buzzer/src/main.cpp` | Portierung von `firmware/01_display_touch_buzzer/01_display_touch_buzzer.ino`, inhaltlich identisch |
-| `stage1_display_touch_buzzer/include/*.h` | Kopien der Header aus `firmware/01_display_touch_buzzer/` |
+| `platformio.ini` | Elecrows offizielle Plattform-/Board-Konfiguration + LovyanGFX-Version |
+| `boards/ESP32-S3-WROOM-1-N16R8.json` | **Notwendig** — eigene Board-Definition, ohne die PlatformIO die Board-ID nicht kennt ("UnknownBoard") |
+| `sdkconfig.defaults.esp32s3` | Setzt `CONFIG_SPIRAM_SPEED_120M` als echte ESP-IDF-Kconfig-Option (nicht nur Compiler-Define) |
+| `sdkconfig.defaults` | Fast leer (Elecrows Original enthält hier nur LVGL-Einstellungen); muss aber als Datei existieren |
+| `partitions.csv` | 1:1 aus Elecrows offiziellem PlatformIO-Beispiel übernommen |
+| `src/main.cpp` | Inhaltlich identisch zum jeweiligen `firmware/0X_*/*.ino` |
+| `include/rgb_panel.h` | RGB-Panel-Bringup über `esp_lcd_panel_rgb` (Bounce Buffer statt LovyanGFX Bus_RGB) |
+| `include/touch_standalone.h` | GT911-Touch eigenständig, ohne LGFX-Device |
+| `include/*.h` (restliche) | Pin-/Adressreferenz, Touch-Timing-Fixes, Backlight/Buzzer |
 
-**Wichtig zum Verstaendnis:** Der `-DCONFIG_SPIRAM_SPEED_120M=1` in `build_flags`
-(platformio.ini) allein haette NICHT gereicht — das ist nur ein
-Compiler-Define, das den Diagnose-Print im Code beeinflusst, aber nicht die
-tatsaechliche Hardware-Taktung des PSRAM-Treibers aendert. Die echte
-Aenderung passiert ueber `sdkconfig.defaults.esp32s3`, das PlatformIO beim
-Bauen automatisch erkennt und in die zugrundeliegende ESP-IDF-Konfiguration
-einspeist (Arduino laeuft unter diesem Core als ESP-IDF-Komponente).
-
-## Ergebnis dieses Tests entscheidet über das weitere Vorgehen
-
-- **Display läuft jetzt zuverlässig ohne Bildfehler:** PSRAM-Takt war die
-  Ursache. Die restlichen vier Stages (`firmware/02_wifi_espnow` bis
-  `firmware/05_pn532_spi`) werden dann ebenfalls nach PlatformIO portiert.
-- **Problem besteht weiterhin:** PSRAM-Takt war nicht die (alleinige)
-  Ursache — dann bleibt es bei der Arduino-IDE-Toolchain und wir suchen an
-  anderer Stelle weiter (z. B. Signalintegrität/Verkabelung, weitere
-  LovyanGFX-Timing-Parameter).
+**Wichtig zum Verstehen von `CONFIG_SPIRAM_SPEED_120M`:** Der
+`-DCONFIG_SPIRAM_SPEED_120M=1` in `build_flags` (platformio.ini) allein
+hätte NICHT gereicht — das ist nur ein Compiler-Define für den
+Diagnose-Print im Code. Die echte Hardware-Taktung passiert über
+`sdkconfig.defaults.esp32s3`, das PlatformIO automatisch erkennt und in die
+zugrundeliegende ESP-IDF-Konfiguration einspeist.
