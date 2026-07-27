@@ -1,16 +1,16 @@
 # Firmware — Stufenweiser Funktionstest CrowPanel Advance 5.0
 
-Fünf unabhängige, einzeln flashbare Arduino-Sketches, die die Hardware
-dieses Boards Schritt für Schritt aufbauen und testen — in der Reihenfolge,
-in der sie üblicherweise ans Laufen gebracht werden:
+Fünf aufeinander aufbauende, einzeln flashbare Arduino-Sketches, die die
+Hardware dieses Boards Schritt für Schritt aufbauen und testen — in der
+Reihenfolge, in der sie üblicherweise ans Laufen gebracht werden:
 
 | Ordner | Testet | Status |
 |---|---|---|
 | `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | fertig, RGB-Ausgabe auf esp_lcd_panel_rgb umgebaut (siehe unten), an echter Hardware verifiziert (sauberes Bild, Touch nach Stromlos-Start OK) |
 | `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | fertig, an echter Hardware verifiziert (2 Boards, inkl. Fix für Task-Race beim ESP-NOW-Empfang, siehe Abschnitt 7) |
-| `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt erhalten) | auf esp_lcd_panel_rgb umgebaut, wird getestet |
-| `04_sd_card/` | SD-/TF-Karte: Live-Erkennung (Einstecken/Herausziehen) + fortlaufendes ESP-NOW-Log — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben erhalten) | auf esp_lcd_panel_rgb umgebaut, wird getestet |
-| `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) | fertig (nutzt noch LovyanGFX Bus_RGB) |
+| `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt erhalten) | fertig, an echter Hardware verifiziert (als Teil von Stage 4 mitbestätigt) |
+| `04_sd_card/` | SD-/TF-Karte: Live-Erkennung (Einstecken/Herausziehen) + fortlaufendes ESP-NOW-Log — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben erhalten) | fertig, an echter Hardware verifiziert (SD-Erkennung + Logging funktionieren) |
+| `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) — Erweiterung von Stage 4 (SD, RTC, WLAN/ESP-NOW bleiben erhalten), Bildschirm auf Nutzerwunsch kompakter statt Funktionen wegzulassen | auf esp_lcd_panel_rgb umgebaut, wird getestet |
 
 ### Wichtige Architekturänderung (esp_lcd_panel_rgb statt LovyanGFX Bus_RGB)
 
@@ -23,17 +23,15 @@ kontinuierlichen GDMA-Bildausgabe um dieselbe PSRAM-Bandbreite konkurrieren.
 Espressifs eigener ESP-IDF-Treiber (`esp_lcd_panel_rgb`) hat dafür einen
 Bounce Buffer (kleiner SRAM-Zwischenpuffer) eingebaut.
 
-`01_display_touch_buzzer`, `02_wifi_espnow`, `03_rtc` und `04_sd_card`
-nutzen deshalb jetzt `esp_lcd_panel_rgb` direkt für die Hardware-Ausgabe
-(`rgb_panel.h`) und GT911-Touch eigenständig ohne LGFX-Device
-(`touch_standalone.h`). LovyanGFX wird nur noch für die Zeichen-API
-genutzt: `LGFX_Sprite canvas` zeigt per `setBuffer()` direkt auf den von
-`esp_lcd_panel_rgb` bereitgestellten Framebuffer. Zusätzlich wartet
-`setup()` 600 ms zwischen `Wire.begin()` und der ersten Touch-Kommunikation,
-da der GT911 nach einem echten Stromlos-Start selbst noch Boot-Zeit
-braucht (nach Reset-Knopf fällt das dort nicht auf, da der Chip dort schon
-läuft). `05_pn532_spi` nutzt noch die alte LovyanGFX-Bus_RGB-Variante —
-wird erst umgestellt, wenn es an der Reihe ist.
+Alle fünf Stages nutzen deshalb jetzt `esp_lcd_panel_rgb` direkt für die
+Hardware-Ausgabe (`rgb_panel.h`) und GT911-Touch eigenständig ohne
+LGFX-Device (`touch_standalone.h`). LovyanGFX wird nur noch für die
+Zeichen-API genutzt: `LGFX_Sprite canvas` zeigt per `setBuffer()` direkt
+auf den von `esp_lcd_panel_rgb` bereitgestellten Framebuffer. Zusätzlich
+wartet `setup()` 600 ms zwischen `Wire.begin()` und der ersten
+Touch-Kommunikation, da der GT911 nach einem echten Stromlos-Start selbst
+noch Boot-Zeit braucht (nach Reset-Knopf fällt das dort nicht auf, da der
+Chip dort schon läuft).
 
 Jeder Ordner ist ein vollständiger, eigenständiger Arduino-Sketch (Ordnername
 = `.ino`-Dateiname, wie von der Arduino-IDE verlangt) und enthält seine
@@ -160,7 +158,10 @@ PN532 SS    -> IO8   (Wireless-Header)
 
 PN532-DIP-Schalter am Modul auf **SPI** (Sw1=OFF, Sw2=ON). Da IO43/44 =
 UART0 TX/RX sind, muss "USB CDC On Boot" auf **Enabled** stehen, sonst
-kollidiert die serielle Konsole mit dem PN532.
+kollidiert die serielle Konsole mit dem PN532 (Arduino IDE: Werkzeuge-Menü;
+PlatformIO: `-DARDUINO_USB_MODE=1 -DARDUINO_USB_CDC_ON_BOOT=1` in
+`build_flags`, bereits in `platformio/stage5_pn532_spi/platformio.ini`
+gesetzt).
 
 SD (Stage 4, IO4/5/6) und PN532 (Stage 5, IO43/44/2/8) nutzen unterschiedliche
 Pins und können bei S1/S0=1/1 gleichzeitig betrieben werden — in einem

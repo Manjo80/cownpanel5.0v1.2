@@ -47,8 +47,9 @@ Extension baut die Python-Umgebung automatisch neu auf.
 |---|---|---|
 | `stage1_display_touch_buzzer/` | `firmware/01_display_touch_buzzer/` | Ja — an echter Hardware verifiziert |
 | `stage2_wifi_espnow/` | `firmware/02_wifi_espnow/` | Ja — an echter Hardware verifiziert (2 Boards) |
-| `stage3_rtc/` | `firmware/03_rtc/` | Ja — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt), wird getestet |
-| `stage4_sd_card/` | `firmware/04_sd_card/` | Ja — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben), wird getestet |
+| `stage3_rtc/` | `firmware/03_rtc/` | Ja — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt), an echter Hardware verifiziert |
+| `stage4_sd_card/` | `firmware/04_sd_card/` | Ja — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben), an echter Hardware verifiziert |
+| `stage5_pn532_spi/` | `firmware/05_pn532_spi/` | Ja — Erweiterung von Stage 4 (SD, RTC, WLAN/ESP-NOW bleiben), kompakteres Layout, wird getestet |
 
 Jeder Stage-Ordner enthält:
 
@@ -70,3 +71,13 @@ hätte NICHT gereicht — das ist nur ein Compiler-Define für den
 Diagnose-Print im Code. Die echte Hardware-Taktung passiert über
 `sdkconfig.defaults.esp32s3`, das PlatformIO automatisch erkennt und in die
 zugrundeliegende ESP-IDF-Konfiguration einspeist.
+
+**Besonderheiten von `stage5_pn532_spi/`:**
+- `build_flags` enthält zusätzlich `-DARDUINO_USB_MODE=1
+  -DARDUINO_USB_CDC_ON_BOOT=1` — Entsprechung zu Arduino IDEs "USB CDC On
+  Boot: Enabled", nötig weil der PN532 auf UART0-Pins (IO43/44) hängt und
+  die serielle Konsole deshalb über den nativen USB-CDC-Port laufen muss.
+- `lib_deps` bringt `Adafruit PN532` automatisch mit, aber NICHT die zwei
+  nötigen Patches (siehe `firmware/README.md` Abschnitt 3) — die müssen
+  nach dem ersten Build manuell in
+  `.pio/libdeps/advance-hmi/Adafruit PN532/` nachgetragen werden.

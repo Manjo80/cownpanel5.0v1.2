@@ -34,6 +34,7 @@
 // waere stattdessen inListPassiveTarget() zur Kartenaktivierung noetig --
 // siehe README.md, bewusst nicht Teil dieses Basis-Funktionstests.
 
+#include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
