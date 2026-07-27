@@ -2,24 +2,39 @@
 // RGB-Panel-Bringup ueber Espressifs eigenen ESP-IDF-Treiber (esp_lcd_panel_rgb),
 // NICHT ueber LovyanGFX's Bus_RGB/Panel_RGB.
 //
-// Grund: LovyanGFX's Bus_RGB hat keinen "Bounce Buffer" (siehe
-// src/lgfx/v1/platforms/esp32s3/Bus_RGB.hpp -- config_t enthaelt nur reine
-// Pin-/Timing-Parameter, keine Bounce-Buffer-Option). Der ESP32-S3 hat ein
+// Grund fuer esp_lcd_panel_rgb allgemein: LovyanGFX's Bus_RGB hat keinen
+// Anti-Tearing-Mechanismus (siehe src/lgfx/v1/platforms/esp32s3/Bus_RGB.hpp --
+// config_t enthaelt nur reine Pin-/Timing-Parameter). Der ESP32-S3 hat ein
 // bekanntes Problem: liegt der Framebuffer im PSRAM (zwingend, da SRAM zu
-// klein ist) und schreibt die CPU gleichzeitig hinein (z. B. beim Zeichnen
-// eines Buttons), konkurriert das mit der GDMA-Hardware, die denselben
-// Speicher kontinuierlich fuer die Bildausgabe ausliest -- beide teilen
-// sich dieselbe PSRAM-Bandbreite. Espressifs eigener Treiber hat genau
-// dafuer einen Bounce Buffer eingebaut: ein kleiner Zwischenpuffer im
-// schnellen internen SRAM, den die GDMA ausliest, waehrend er im
-// Hintergrund kontrolliert aus dem PSRAM-Framebuffer nachgefuellt wird --
-// das entkoppelt die zeitkritische Bildausgabe von CPU-Schreibzugriffen.
+// klein ist) und schreibt die CPU gleichzeitig hinein, waehrend die GDMA-
+// Hardware denselben Speicher kontinuierlich fuer die Bildausgabe ausliest,
+// entstehen sichtbare Bildfehler.
 //
-// Wir nutzen weiterhin LovyanGFX's Zeichen-API (Sprites, Fonts, Formen),
-// aber nur noch als "Sprite", der DIREKT auf den von diesem Treiber
-// verwalteten Framebuffer zeigt (LGFX_Sprite::setBuffer()) -- die
-// tatsaechliche Hardware-Ausgabe (Timing, DMA, Bounce Buffer) macht
-// vollstaendig esp_lcd_panel_rgb, nicht mehr LovyanGFX.
+// esp_lcd_panel_rgb bietet dafuer zwei Anti-Tearing-Strategien, laut
+// ESP-IDF NICHT gleichzeitig nutzbar:
+//  1. Bounce Buffer (fruehere Version dieser Datei): ein kleiner SRAM-
+//     Zwischenpuffer, den die GDMA ausliest, waehrend er im Hintergrund aus
+//     dem PSRAM-Framebuffer nachgefuellt wird. Loest reine Bandbreiten-
+//     Streifen -- aber NICHT das Problem, dass ein direkt in den einzigen
+//     Framebuffer schreibender Teil-Redraw waehrend des Auslesens sichtbare
+//     "Geister" alter Zeichenoperationen hinterlassen kann (beobachtet in
+//     Stage 2 bei den Text-Updates: schwache Text-Reste über den echten
+//     Zeilen).
+//  2. Doppelter Framebuffer (num_fbs = 2, jetzt aktiv): die CPU zeichnet nie
+//     in den Framebuffer, der gerade von der GDMA ausgelesen wird --
+//     esp_lcd_panel_draw_bitmap() kopiert fertige Bilddaten in den jeweils
+//     INAKTIVEN Framebuffer und tauscht ihn erst beim naechsten VSYNC
+//     sichtbar um. Tearing-frei, kostet aber den doppelten Framebuffer-
+//     Speicher (bei 800x480x16bpp: 2 x 750 KiB PSRAM -- bei 8 MiB PSRAM kein
+//     Problem).
+//
+// Konsequenz fuer die *.ino/main.cpp-Dateien: "canvas" zeigt NICHT mehr
+// direkt auf einen der beiden Hardware-Framebuffer, sondern auf einen
+// dritten, eigenen PSRAM-Puffer, den die GDMA nie sieht. Darin darf beliebig
+// oft und beliebig granular (Teil-Redraws) gezeichnet werden, ohne jemals
+// Tearing zu riskieren. Erst wenn eine zusammengehoerige Aenderung fertig
+// ist, wird ihr kompletter Inhalt per rgbPanelFlush() in den Hardware-
+// Doppelpuffer kopiert.
 
 #include <Arduino.h>
 #include "esp_lcd_panel_ops.h"
@@ -27,13 +42,6 @@
 #include "pins.h"
 
 static esp_lcd_panel_handle_t g_rgbPanelHandle = nullptr;
-static void *g_rgbFrameBuffer = nullptr;
-
-// bounce_buffer_size_px: Groesse des SRAM-Zwischenpuffers in Pixeln, in
-// beide Richtungen doppelt vorgehalten. 10 Bildzeilen sind ein in
-// Espressifs eigenen Beispielen fuer 800x480-Panels ueblicher Startwert --
-// bei Bedarf (weiterhin Bildfehler oder zu hoher SRAM-Verbrauch) anpassen.
-static const size_t RGB_BOUNCE_BUFFER_LINES = 10;
 
 inline bool rgbPanelInit() {
   esp_lcd_rgb_panel_config_t panel_config = {};
@@ -61,10 +69,8 @@ inline bool rgbPanelInit() {
 
   panel_config.data_width = 16;
   panel_config.bits_per_pixel = 16;
-  panel_config.num_fbs = 1;
-  panel_config.bounce_buffer_size_px = LCD_WIDTH * RGB_BOUNCE_BUFFER_LINES;
-  // psram_trans_align entfernt: in neueren ESP-IDF-Versionen als deprecated
-  // markiert (durch ein internes Feld in einer Union ersetzt); Default reicht.
+  // Doppelter Framebuffer statt Bounce Buffer -- siehe Erklaerung oben.
+  panel_config.num_fbs = 2;
 
   panel_config.hsync_gpio_num = PIN_LCD_HSYNC;
   panel_config.vsync_gpio_num = PIN_LCD_VSYNC;
@@ -111,11 +117,15 @@ inline bool rgbPanelInit() {
     return false;
   }
 
-  err = esp_lcd_rgb_panel_get_frame_buffer(g_rgbPanelHandle, 1, &g_rgbFrameBuffer);
-  if (err != ESP_OK || g_rgbFrameBuffer == nullptr) {
-    Serial.printf("esp_lcd_rgb_panel_get_frame_buffer() fehlgeschlagen: %d\n", (int)err);
-    return false;
-  }
-
   return true;
+}
+
+// Kopiert den kompletten Inhalt von buf (muss LCD_WIDTH x LCD_HEIGHT Pixel
+// im 16bpp-Format des canvas-Sprites sein) in den aktuell inaktiven
+// Hardware-Framebuffer und macht ihn erst beim naechsten VSYNC sichtbar --
+// tearing-frei dank num_fbs = 2 oben. Nach jeder zusammengehoerigen
+// Zeichenoperation auf "canvas" einmal aufrufen (nicht nach jedem einzelnen
+// fillRect/drawString -- das waere unnoetig teuer).
+inline void rgbPanelFlush(void *buf) {
+  esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, 0, 0, LCD_WIDTH, LCD_HEIGHT, buf);
 }
