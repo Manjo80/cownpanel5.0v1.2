@@ -437,7 +437,14 @@ void setRtcFromCompileTime() {
 }
 
 #ifdef USE_WIFI_NTP_SYNC
-void syncFromNtp() {
+// Gibt true/false zurueck, statt nur nach Serial zu loggen -- der
+// Touch-Handler (siehe loop()) laesst den NTP-SYNC-Button dafuer kurz rot
+// aufleuchten, wenn es NICHT geklappt hat. Ohne diese sichtbare
+// Rueckmeldung sah man dem Button nicht an, ob die WLAN-Verbindung
+// fehlgeschlagen ist, der NTP-Server nicht erreichbar war, o.ae. --
+// man musste den Serial Monitor mitlaufen lassen, um ueberhaupt zu merken,
+// DASS es fehlgeschlagen ist.
+bool syncFromNtp() {
   Serial.print("Verbinde mit WLAN fuer NTP");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   uint32_t startMs = millis();
@@ -448,7 +455,7 @@ void syncFromNtp() {
   Serial.println();
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WLAN-Verbindung fehlgeschlagen, NTP-Sync abgebrochen.");
-    return;
+    return false;
   }
 
   // EU-Zeitzonenregel (Luxemburg) inkl. automatischer Sommerzeitumstellung.
@@ -456,8 +463,8 @@ void syncFromNtp() {
 
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo, 10000)) {
-    Serial.println("NTP-Sync fehlgeschlagen (Timeout).");
-    return;
+    Serial.println("NTP-Sync fehlgeschlagen (Timeout -- Server nicht erreichbar?).");
+    return false;
   }
 
   RtcDateTime dt;
@@ -472,9 +479,10 @@ void syncFromNtp() {
 
   if (rtcWrite(dt)) {
     Serial.println("RTC per NTP synchronisiert.");
-  } else {
-    Serial.println("FEHLER: RTC-Schreibzugriff nach NTP-Sync fehlgeschlagen.");
+    return true;
   }
+  Serial.println("FEHLER: RTC-Schreibzugriff nach NTP-Sync fehlgeschlagen.");
+  return false;
 }
 #endif
 
@@ -589,15 +597,21 @@ void loop() {
     updateSendInfo();
   }
 
-  // Kurzer, nicht-blockierender Poll-Versuch (10ms Timeout in
-  // readPassiveTargetID()) -- danach 1s Entprellen, damit eine aufliegende
-  // Karte nicht staendig neu "erkannt" wird.
+  // Kurzer Poll-Versuch (100ms Timeout in readPassiveTargetID()) -- danach
+  // 1s Entprellen, damit eine aufliegende Karte nicht staendig neu
+  // "erkannt" wird. 100ms statt der urspruenglich probierten 10ms: DESFire-
+  // Karten antworten auf die ISO14443A-Anticollision/Select-Sequenz
+  // teils spuerbar langsamer als einfache Mifare-Classic-Karten, und
+  // Software-SPI (statt Hardware-SPI) fuegt zusaetzliche Kommunikations-
+  // Latenz hinzu -- mit 10ms lief das readPassiveTargetID() bei DESFire-
+  // Karten offenbar regelmaessig in den Timeout, ohne dass ueberhaupt ein
+  // Lesevorgang sichtbar war ("es passiert nichts beim Scannen").
   if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
     lastPn532AttemptMs = now;
     if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
       uint8_t uid[7];
       uint8_t uidLength;
-      if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 10)) {
+      if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100)) {
         char uidHex[24] = {0};
         for (uint8_t i = 0; i < uidLength; i++) {
           char byteStr[4];
@@ -622,14 +636,21 @@ void loop() {
       drawButton(btnSetCompile, TFT_DARKGREY);
     } else if (inside(btnNtpSync, x, y)) {
       drawButton(btnNtpSync, TFT_GREEN);
+      bool ntpOk = false;
 #ifdef USE_WIFI_NTP_SYNC
-      syncFromNtp();
+      ntpOk = syncFromNtp();
       updateRtcInfo();
 #else
       Serial.println("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
 #endif
       buzzerBeep(80);
-      drawButton(btnNtpSync, TFT_DARKGREY);
+      // Sichtbare Rueckmeldung statt nur Serial: rot kurz aufleuchten bei
+      // Fehlschlag/deaktiviert, sonst direkt zurueck auf grau.
+      drawButton(btnNtpSync, ntpOk ? TFT_DARKGREY : TFT_RED);
+      if (!ntpOk) {
+        delay(500);
+        drawButton(btnNtpSync, TFT_DARKGREY);
+      }
     } else if (inside(btnBeep, x, y)) {
       drawButton(btnBeep, TFT_GREEN);
       buzzerBeep(150);
