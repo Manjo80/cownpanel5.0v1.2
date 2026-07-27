@@ -386,10 +386,66 @@ oder drei Buttons nebeneinander ist.
   tatsächlichen LovyanGFX-Konvention passt — bitte melden, dann wird die
   Formel korrigiert.
 
-## 10. Ausblick — nicht Teil dieser fünf Stages
+## 10. DESFire-Schreibfunktionen (Stage 5, 7 zusätzliche Buttons)
+
+Auf Nutzerwunsch kann Stage 5 jetzt auch schreibend auf eine DESFire-Karte
+zugreifen: eigene Applikation mit Guthaben-Datei anlegen/löschen,
+Guthaben buchen/nutzen/abfragen, und den Werks-Default-Schlüssel gegen
+einen eigenen Schlüssel tauschen (und zurück). Alle 7 Buttons rechts
+unten im Hochformat-Layout (siehe Abschnitt 9), alle Parameter fest im
+Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
+
+| Konstante | Wert | Bedeutung |
+|---|---|---|
+| `CUSTOM_AID` | `0x123456` | AID der selbst angelegten Applikation |
+| `CUSTOM_KEY` | 16 zufällige Byte (`openssl rand -hex 16`) | Ersetzt Key 0 bei "MASTER-PW SETZEN" |
+| `VALUE_FILE_NO` | `0` | Einzige Datei in der App, ein Value File |
+| `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
+| `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
+
+**Buttons:**
+
+- **MASTER-PW SETZEN / AUF STANDARD** — authentifiziert mit dem jeweils
+  *aktuell gültigen* Schlüssel (`desfireAuthEitherKey()` probiert erst
+  Default, dann Custom) und ändert Key 0 per `ChangeKey` auf den anderen
+  Wert. Wirkt **sowohl auf PICC-Ebene** (AID `000000`, betrifft die
+  **gesamte Karte**) **als auch** — falls schon vorhanden — auf die
+  eigene Applikation, in **einem** Tastendruck. Existiert die App noch
+  nicht, wird nur die PICC-Ebene gesichert; ein erneuter Tastendruck nach
+  "APP ERSTELLEN" sichert dann auch die App nachträglich.
+- **APP ERSTELLEN** — `CreateApplication(CUSTOM_AID)` auf PICC-Ebene,
+  danach `CreateValueFile` (Guthaben startet bei 0) in der neuen App.
+- **APP LOESCHEN** — `DeleteApplication(CUSTOM_AID)`, muss laut
+  DESFire-Vorgabe auf PICC-Ebene authentifiziert aufgerufen werden.
+- **GUTHABEN BUCHEN / NUTZEN** — `Credit`/`Debit` + `CommitTransaction`
+  (ohne Commit werden Buchungen beim nächsten Kommando verworfen). Bei
+  "NUTZEN": die **Karte selbst** lehnt ab, wenn das Guthaben dadurch unter
+  `VALUE_LOWER_LIMIT` (0) fallen würde (Status meist `BOUNDARY_ERROR`) —
+  keine eigene Guthaben-Prüfung nötig/implementiert.
+- **GUTHABEN ABFRAGEN** — `GetValue`, Ergebnis in der Zusammenfassungszeile.
+
+**Sicherheitshinweis ChangeKey (bitte lesen, bevor an einer echten Karte
+getestet wird):** Das Kryptogramm enthält eine CRC (CRC-A/CRC16 bei
+2K3DES, CRC-32 bei AES), die die **Karte selbst** nach dem Entschlüsseln
+prüft. Stimmen IV, Byte-Layout oder CRC nicht exakt mit der
+NXP-Spezifikation überein, verwirft die Karte das Kommando (Status
+ungleich `0x00`) — der Schlüssel bleibt dann **unverändert**, es entsteht
+kein kaputter/unbekannter Schlüssel-Zustand. Trotzdem: dieser Code wurde
+**nicht an echter DESFire-Hardware getestet**. Implementiert ist
+außerdem **nur** der Fall "eigenen, gerade authentifizierten Schlüssel
+ändern" — kein Wechsel eines *anderen* als des authentifizierten
+Schlüssels (dafür bräuchte es die XOR-Verknüpfung von Alt-/Neuschlüssel
+im Kryptogramm, hier nirgends gebraucht).
+
+**Bewusst weggelassen:** CMAC/Secure-Messaging für die Dateikommunikation
+(Value File läuft im Plain-Modus), Schlüssel-Eingabe über die UI (alles
+hardcoded), allgemeiner ChangeKey für fremde Schlüssel, mehr als 1
+Schlüssel/Applikation.
+
+## 11. Ausblick — nicht Teil dieser fünf Stages
 
 - Kombiniertes Gesamtprojekt, das alle Subsysteme gleichzeitig nutzt.
-- DESFire-Applikations-Lebenszyklus über PN532 (CreateApplication,
-  Credit/Debit, ChangeKey, CMAC-Schutz/Enciphered-Kommunikation nach der
-  Auth, EV2-Secure-Messaging, 3K3DES) — deutlich größerer Umfang als die
-  Lese-Funktionalität in Abschnitt 8.
+- CMAC-Schutz/Enciphered-Kommunikation nach der Authentifizierung,
+  EV2-Secure-Messaging, 3K3DES, ChangeKey für einen anderen als den
+  authentifizierten Schlüssel — deutlich größerer Umfang als die
+  Lese-/Schreib-Funktionalität in Abschnitt 8/10.

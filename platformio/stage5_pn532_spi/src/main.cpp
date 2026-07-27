@@ -1,11 +1,14 @@
 // Stage 5 -- PN532 NFC ueber Software-SPI, Erweiterung von Stage 4
 // Board: Elecrow CrowPanel Advance 5.0 (DIS02050A), ESP32-S3-WROOM-1 N16R8
 //
-// Baut auf Stage 4 auf: SD-Karten-Status, RTC-Anzeige, STELLEN/NTP-SYNC-
-// Buttons und der komplette WLAN/ESP-NOW-Status (inkl. Log-Datei) bleiben
-// erhalten. Neu dazu kommt der PN532-NFC-Leser: Firmware-Version beim Start
-// + fortlaufendes UID-Lesen aufgelegter Karten. Der Bildschirm ist jetzt
-// SEHR voll -- bewusst so gewaehlt (kompakter statt Funktionen wegzulassen).
+// Baut auf Stage 4 auf: SD-Karten-Status, RTC-Anzeige und der komplette
+// WLAN/ESP-NOW-Status (inkl. Log-Datei) bleiben erhalten (STELLEN/BEEP
+// sind auf Nutzerwunsch entfallen, siehe Button-Layout unten). Neu dazu
+// kommt der PN532-NFC-Leser: Firmware-Version beim Start, fortlaufendes
+// Lesen aufgelegter Karten inkl. DESFire-Tiefenauslesung, sowie 7
+// DESFire-Schreibfunktionen (Guthaben-App anlegen/nutzen/loeschen,
+// Schluessel wechseln). Der Bildschirm ist jetzt SEHR voll -- bewusst so
+// gewaehlt (kompakter statt Funktionen wegzulassen).
 //
 // AUF NUTZERWUNSCH um 90 Grad gedreht (Hochformat statt Querformat, siehe
 // DISPLAY_ROTATION weiter unten) -- NUR in Stage 5, Stufen 1-4 bleiben beim
@@ -43,10 +46,10 @@
 // zweiter Aufruf direkt nach einem bereits erfolgreichen ersten schlaegt an
 // echter Hardware regelmaessig fehl, weil die Karte dann schon aktiviert
 // ist und auf eine erneute Anticollision/Select-Sequenz nicht mehr
+#include <Arduino.h>
 // antwortet (siehe README.md). Die UID kommt stattdessen aus
 // desfireGetVersion() (siehe desfireDeepRead()).
 
-#include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
@@ -66,8 +69,8 @@
 
 // Fuer echten NTP-Abgleich einkommentieren und wifi_secrets.h anlegen
 // (Kopie von wifi_secrets.example.h in diesem Ordner, eigene Zugangsdaten
-// eintragen). Ohne das geht STELLEN (Compile-Zeit) weiterhin, nur NTP-SYNC
-// meldet dann "deaktiviert".
+// eintragen). Ohne das melden NTP-SYNC und der WLAN/ESP-NOW-Umschalter
+// "deaktiviert".
 // #define USE_WIFI_NTP_SYNC
 #ifdef USE_WIFI_NTP_SYNC
 #include <time.h>
@@ -109,15 +112,41 @@ struct Button {
 };
 
 // Layout fuer das gedrehte 480 (breit) x 800 (hoch) Koordinatensystem --
-// eine Spalte statt eines Rasters aus zwei Reihen, da bei 480px Breite
-// nicht mehr genug Platz fuer zwei/drei Buttons nebeneinander ist. Dafuer
-// steht durch die 800px Hoehe deutlich mehr vertikaler Platz zur
-// Verfuegung als im vorherigen 800x480-Querformat-Layout.
-Button btnSetCompile = { 16, 336, 448, 56, "STELLEN (Compile-Zeit)" };
-Button btnNtpSync    = { 16, 404, 448, 56, "NTP-SYNC" };
-Button btnBeep       = { 16, 472, 448, 56, "BEEP" };
-Button btnBrightUp   = { 16, 540, 448, 56, "BACKLIGHT +" };
-Button btnBrightDn   = { 16, 608, 448, 56, "BACKLIGHT -" };
+// 2 Spalten x 6 Zeilen (letzte Zeile nur 1 Button), da mit den neuen
+// DESFire-Schreibfunktionen 11 Buttons noetig sind -- STELLEN (Compile-
+// Zeit) und BEEP sind auf Nutzerwunsch entfallen, dafuer WLAN/ESP-NOW-
+// Umschalter und 7 DESFire-Buttons dazugekommen.
+const int BTN_COL_W = 216, BTN_H = 48, BTN_ROW_GAP = 60;
+const int BTN_LEFT_X = 16, BTN_RIGHT_X = 248;
+const int BTN_ROW1_Y = 310;
+
+Button btnNtpSync        = { BTN_LEFT_X,  BTN_ROW1_Y + 0 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "NTP-SYNC" };
+Button btnWifiToggle     = { BTN_RIGHT_X, BTN_ROW1_Y + 0 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "WLAN/ESP-NOW" };
+Button btnBrightUp       = { BTN_LEFT_X,  BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "BACKLIGHT +" };
+Button btnBrightDn       = { BTN_RIGHT_X, BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "BACKLIGHT -" };
+Button btnSetMasterKey   = { BTN_LEFT_X,  BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "MASTER-PW SETZEN" };
+Button btnResetMasterKey = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "AUF STANDARD" };
+Button btnCreateApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN" };
+Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP LOESCHEN" };
+Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
+Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
+Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
+
+// Custom-AID/-Schluessel fuer die DESFire-Schreibfunktionen -- alles
+// hardcoded, da das Panel keine Tastatur/Texteingabe hat (siehe
+// firmware/README.md). CUSTOM_KEY zufaellig erzeugt (openssl rand -hex
+// 16) -- bei Bedarf hier austauschen. AID LSB-zuerst gespeichert
+// (DESFire-Konvention), entspricht menschenlesbar AID 0x123456.
+const uint8_t PICC_AID[3]   = { 0x00, 0x00, 0x00 };
+const uint8_t CUSTOM_AID[3] = { 0x56, 0x34, 0x12 };
+const uint8_t CUSTOM_KEY[16] = {
+  0x52, 0xC7, 0xCE, 0x05, 0x82, 0xD4, 0xA3, 0x62,
+  0x39, 0xEB, 0xEF, 0xC9, 0x60, 0x34, 0x29, 0xB5
+};
+const uint8_t VALUE_FILE_NO = 0;
+const int32_t VALUE_LOWER_LIMIT = 0;       // Karte lehnt Debit unter 0 selbst ab
+const int32_t VALUE_UPPER_LIMIT = 1000000; // willkuerliche, aber grosszuegige Obergrenze
+const int32_t CREDIT_DEBIT_AMOUNT = 100;   // fester Betrag pro Tastendruck, leicht aenderbar
 
 uint8_t backlightPercent = 80;
 
@@ -178,6 +207,13 @@ uint32_t lastUidReadMs = 0;
 // wurde, auch wenn der anschliessende NTP-Request selbst fehlschlaegt.
 char wifiIpMsg[48] = "WLAN: nicht verbunden";
 uint16_t wifiIpColor = TFT_LIGHTGREY;
+// Umschalter WLAN/ESP-NOW (siehe btnWifiToggle-Handler in loop()): false =
+// ESP-NOW-Broadcast-Modus (Default, keine AP-Verbindung), true = mit dem
+// AP verbunden (fuer NTP-SYNC). WiFi.mode(WIFI_STA) bleibt in beiden
+// Faellen gesetzt -- ESP-NOW braucht das, aber keine AP-Assoziation.
+bool wlanModeActive = false;
+const uint32_t WIFI_POLL_INTERVAL_MS = 1000;
+uint32_t lastWifiPollMs = 0;
 
 // Bereichsgrenzen der einzelnen Update-Funktionen -- an einer Stelle
 // definiert, damit das fillRect() in der jeweiligen Funktion garantiert
@@ -202,7 +238,10 @@ void drawButton(const Button &b, uint16_t fill) {
   // Panel deutlich heller als am Schreibtisch erwartet) bzw. gruenen
   // Button-Fuellgrund war weisse Schrift kaum lesbar.
   canvas.setTextColor(TFT_BLACK);
-  canvas.setTextSize(2);
+  // 1.5 statt 2 -- die 2-spaltigen 216px-breiten Buttons (11 Stueck, siehe
+  // Button-Layout oben) brauchen bei den laengeren Labels ("MASTER-PW
+  // SETZEN" etc.) etwas mehr Luft, als textSize(2) noch zulassen wuerde.
+  canvas.setTextSize(1.5);
   canvas.setTextDatum(lgfx::middle_center);
   canvas.drawString(b.label, b.x + b.w / 2, b.y + b.h / 2);
 }
@@ -250,11 +289,17 @@ void drawStaticParts() {
   canvas.print("Eigene MAC: ");
   canvas.println(WiFi.macAddress());
 
-  drawButton(btnSetCompile, TFT_DARKGREY);
   drawButton(btnNtpSync, TFT_DARKGREY);
-  drawButton(btnBeep, TFT_DARKGREY);
+  drawButton(btnWifiToggle, TFT_DARKGREY);
   drawButton(btnBrightUp, TFT_DARKGREY);
   drawButton(btnBrightDn, TFT_DARKGREY);
+  drawButton(btnSetMasterKey, TFT_DARKGREY);
+  drawButton(btnResetMasterKey, TFT_DARKGREY);
+  drawButton(btnCreateApp, TFT_DARKGREY);
+  drawButton(btnDeleteApp, TFT_DARKGREY);
+  drawButton(btnCredit, TFT_DARKGREY);
+  drawButton(btnDebit, TFT_DARKGREY);
+  drawButton(btnGetValue, TFT_DARKGREY);
 }
 
 // Nur die SD-Statuszeile -- wird ausschliesslich bei einem tatsaechlichen
@@ -636,6 +681,264 @@ void desfireDeepRead() {
            appCount, authedApps, sdMounted ? "siehe SD-Log" : "SD nicht gemountet");
 }
 
+// =======================================================================
+// DESFire-Schreibfunktionen (die 7 neuen Buttons) -- auf Nutzerwunsch,
+// siehe firmware/README.md fuer Umfang/Einschraenkungen/Risikohinweise.
+// Jede Funktion aktiviert die Karte selbst (unabhaengig vom Auto-Scan-
+// Polling oben) und piept erst am ENDE (Erfolg ODER Fehlschlag), nicht
+// beim blossen Erkennen der Karte.
+// =======================================================================
+
+// Aktiviert eine aufliegende Karte fuer EIN einzelnes Schreibkommando.
+// Meldet ueber desfireSummaryMsg + Rueckgabewert, falls keine Karte da ist.
+bool desfireOpBegin() {
+  if (!nfc.inListPassiveTarget()) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Keine Karte aufgelegt.");
+    updateUidInfo();
+    return false;
+  }
+  return true;
+}
+
+// "MASTER-PW SETZEN": authentifiziert mit dem AKTUELL gueltigen Schluessel
+// (Default ODER Custom, je nachdem was gerade gilt -- siehe
+// desfireAuthEitherKey()) und setzt Key 0 per ChangeKey auf CUSTOM_KEY.
+// Betrifft SOWOHL die PICC-Ebene (AID 000000, die GANZE Karte) ALS AUCH,
+// falls schon vorhanden, die eigene Applikation (CUSTOM_AID) -- beides in
+// einem Tastendruck. Existiert die Applikation noch nicht, wird nur die
+// PICC-Ebene gesichert; ein erneuter Tastendruck NACH "APP ERSTELLEN"
+// sichert dann auch die App nachtraeglich.
+void desfireOpSetMasterKey() {
+  if (!desfireOpBegin()) return;
+  bool anyOk = false;
+
+  if (desfireSelectApplication(PICC_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (usedCustom) {
+        Serial.println("desfireOpSetMasterKey(): PICC-Key ist bereits der Custom-Key.");
+        anyOk = true;
+      } else if (desfireChangeKeySame(0, CUSTOM_KEY, sessionKey, iv, isAes)) {
+        Serial.println("desfireOpSetMasterKey(): PICC-Master-Key gesetzt.");
+        anyOk = true;
+      } else {
+        Serial.println("desfireOpSetMasterKey(): ChangeKey auf PICC-Ebene fehlgeschlagen.");
+      }
+    } else {
+      Serial.println("desfireOpSetMasterKey(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+    }
+  }
+
+  if (desfireSelectApplication(CUSTOM_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (usedCustom) {
+        Serial.println("desfireOpSetMasterKey(): App-Key ist bereits der Custom-Key.");
+        anyOk = true;
+      } else if (desfireChangeKeySame(0, CUSTOM_KEY, sessionKey, iv, isAes)) {
+        Serial.println("desfireOpSetMasterKey(): App-Key gesetzt.");
+        anyOk = true;
+      } else {
+        Serial.println("desfireOpSetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
+      }
+    } else {
+      Serial.println("desfireOpSetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. noch nicht angelegt).");
+    }
+  }
+
+  snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
+           anyOk ? "Master-PW gesetzt (siehe Serial)" : "Master-PW setzen fehlgeschlagen (siehe Serial)");
+  updateUidInfo();
+  buzzerBeep(anyOk ? 80 : 300);
+}
+
+// "AUF STANDARD": Kehrbild zu oben -- authentifiziert mit dem aktuellen
+// Schluessel; war es der Custom-Key, wird per ChangeKey auf den
+// Werks-Default (16 Nullbytes) zurueckgesetzt. War es schon der Default,
+// ist nichts zu tun. Ebenfalls PICC- UND App-Ebene in einem Tastendruck.
+void desfireOpResetMasterKey() {
+  if (!desfireOpBegin()) return;
+  bool anyOk = false;
+  static const uint8_t zeroKey[16] = {0};
+
+  if (desfireSelectApplication(PICC_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (!usedCustom) {
+        Serial.println("desfireOpResetMasterKey(): PICC-Key ist bereits Standard.");
+        anyOk = true;
+      } else if (desfireChangeKeySame(0, zeroKey, sessionKey, iv, isAes)) {
+        Serial.println("desfireOpResetMasterKey(): PICC-Master-Key zurueckgesetzt.");
+        anyOk = true;
+      } else {
+        Serial.println("desfireOpResetMasterKey(): ChangeKey auf PICC-Ebene fehlgeschlagen.");
+      }
+    } else {
+      Serial.println("desfireOpResetMasterKey(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+    }
+  }
+
+  if (desfireSelectApplication(CUSTOM_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (!usedCustom) {
+        Serial.println("desfireOpResetMasterKey(): App-Key ist bereits Standard.");
+        anyOk = true;
+      } else if (desfireChangeKeySame(0, zeroKey, sessionKey, iv, isAes)) {
+        Serial.println("desfireOpResetMasterKey(): App-Key zurueckgesetzt.");
+        anyOk = true;
+      } else {
+        Serial.println("desfireOpResetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
+      }
+    } else {
+      Serial.println("desfireOpResetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. nicht vorhanden).");
+    }
+  }
+
+  snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
+           anyOk ? "Auf Standard zurueckgesetzt (siehe Serial)" : "Zuruecksetzen fehlgeschlagen (siehe Serial)");
+  updateUidInfo();
+  buzzerBeep(anyOk ? 80 : 300);
+}
+
+// "APP ERSTELLEN": PICC-Ebene auswaehlen+authentifizieren, CUSTOM_AID
+// anlegen, dann in die neue App wechseln (frisch angelegt = Werks-
+// Default-Schluessel) und eine Value-Datei (FileNo 0, Guthaben startet
+// bei 0) darin erstellen. Cipher fuer die neue App richtet sich danach,
+// mit welchem Cipher die PICC-Ebene authentifiziert wurde (2K3DES oder AES).
+void desfireOpCreateApp() {
+  if (!desfireOpBegin()) return;
+  bool ok = false;
+
+  if (desfireSelectApplication(PICC_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (desfireCreateApplication(CUSTOM_AID, isAes)) {
+        if (desfireSelectApplication(CUSTOM_AID)) {
+          uint8_t sessionKey2[16], iv2[16];
+          const char *cipherName2; bool isAes2, usedCustom2;
+          if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey2, iv2, &cipherName2, &isAes2, &usedCustom2)) {
+            ok = desfireCreateValueFile(VALUE_FILE_NO, VALUE_LOWER_LIMIT, VALUE_UPPER_LIMIT, 0);
+          } else {
+            Serial.println("desfireOpCreateApp(): Auth in neuer App fehlgeschlagen.");
+          }
+        }
+      } else {
+        Serial.println("desfireOpCreateApp(): CreateApplication fehlgeschlagen (existiert sie schon?).");
+      }
+    } else {
+      Serial.println("desfireOpCreateApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+    }
+  }
+
+  snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
+           ok ? "Applikation erstellt (Guthaben 0)" : "Applikation erstellen fehlgeschlagen");
+  updateUidInfo();
+  buzzerBeep(ok ? 80 : 300);
+}
+
+// "APP LOESCHEN": muss auf PICC-Ebene authentifiziert aufgerufen werden
+// (DESFire-Vorgabe, nicht innerhalb der zu loeschenden App).
+void desfireOpDeleteApp() {
+  if (!desfireOpBegin()) return;
+  bool ok = false;
+
+  if (desfireSelectApplication(PICC_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      ok = desfireDeleteApplication(CUSTOM_AID);
+    } else {
+      Serial.println("desfireOpDeleteApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+    }
+  }
+
+  snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
+           ok ? "Applikation geloescht" : "Applikation loeschen fehlgeschlagen");
+  updateUidInfo();
+  buzzerBeep(ok ? 80 : 300);
+}
+
+// "GUTHABEN BUCHEN": Credit + CommitTransaction (ohne Commit wird die
+// Buchung beim naechsten Kommando/Verlassen des Feldes verworfen).
+void desfireOpCredit() {
+  if (!desfireOpBegin()) return;
+  bool ok = false;
+
+  if (desfireSelectApplication(CUSTOM_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      ok = desfireCredit(VALUE_FILE_NO, CREDIT_DEBIT_AMOUNT) && desfireCommitTransaction();
+    } else {
+      Serial.println("desfireOpCredit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+    }
+  }
+
+  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben gebucht (+%ld)", (long)CREDIT_DEBIT_AMOUNT);
+  else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben buchen fehlgeschlagen");
+  updateUidInfo();
+  buzzerBeep(ok ? 80 : 300);
+}
+
+// "GUTHABEN NUTZEN": Debit + CommitTransaction. Die KARTE SELBST lehnt
+// das Debit ab (typischerweise Status BOUNDARY_ERROR), wenn das Guthaben
+// dadurch unter VALUE_LOWER_LIMIT (0) fallen wuerde -- keine eigene
+// Vorab-Pruefung noetig.
+void desfireOpDebit() {
+  if (!desfireOpBegin()) return;
+  bool ok = false;
+  bool debitRejected = false;
+
+  if (desfireSelectApplication(CUSTOM_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (desfireDebit(VALUE_FILE_NO, CREDIT_DEBIT_AMOUNT)) {
+        ok = desfireCommitTransaction();
+      } else {
+        debitRejected = true;
+      }
+    } else {
+      Serial.println("desfireOpDebit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+    }
+  }
+
+  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben genutzt (-%ld)", (long)CREDIT_DEBIT_AMOUNT);
+  else if (debitRejected) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Zu wenig Guthaben (Debit abgelehnt)");
+  else snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben nutzen fehlgeschlagen");
+  updateUidInfo();
+  buzzerBeep(ok ? 80 : 300);
+}
+
+// "GUTHABEN ABFRAGEN": GetValue, Ergebnis landet direkt in der
+// DESFire-Zusammenfassungszeile.
+void desfireOpGetValue() {
+  if (!desfireOpBegin()) return;
+  bool ok = false;
+  int32_t value = 0;
+
+  if (desfireSelectApplication(CUSTOM_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      ok = desfireGetValue(VALUE_FILE_NO, value);
+    } else {
+      Serial.println("desfireOpGetValue(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+    }
+  }
+
+  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben: %ld", (long)value);
+  else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben abfragen fehlgeschlagen");
+  updateUidInfo();
+  buzzerBeep(ok ? 80 : 300);
+}
+
 // Core-Versions-abhaengig (siehe README.md Abschnitt 15, Punkt 7).
 void onDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
   lastSendOk = (status == ESP_NOW_SEND_SUCCESS);
@@ -650,62 +953,21 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   recvPending = true;
 }
 
-// Sagt anhand von Julian-Day-artiger Formel den Wochentag voraus (0=So..6=Sa)
-uint8_t computeWeekday(uint16_t y, uint8_t m, uint8_t d) {
-  static const uint8_t t[] = {0,3,2,5,0,3,5,1,4,6,2,4};
-  if (m < 3) y -= 1;
-  return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
-}
-
-// Parst __DATE__ ("Mmm dd yyyy") und __TIME__ ("hh:mm:ss") und schreibt in die RTC.
-void setRtcFromCompileTime() {
-  const char *monthNames = "JanFebMarAprMayJunJulAugSepOctNovDec";
-  char monStr[4];
-  int day, year, hour, minute, second;
-  sscanf(__DATE__, "%3s %d %d", monStr, &day, &year);
-  sscanf(__TIME__, "%d:%d:%d", &hour, &minute, &second);
-  int month = (strstr(monthNames, monStr) - monthNames) / 3 + 1;
-
-  RtcDateTime dt;
-  dt.year = year; dt.month = month; dt.day = day;
-  dt.hour = hour; dt.minute = minute; dt.second = second;
-  dt.weekday = computeWeekday(year, month, day);
-  dt.voltageLow = false;
-
-  if (rtcWrite(dt)) {
-    Serial.println("RTC auf Compile-Zeit gestellt.");
-  } else {
-    Serial.println("FEHLER: RTC-Schreibzugriff fehlgeschlagen (Verkabelung/Adresse pruefen).");
-  }
-}
-
 #ifdef USE_WIFI_NTP_SYNC
 // Gibt true/false zurueck, statt nur nach Serial zu loggen -- der
 // Touch-Handler (siehe loop()) laesst den NTP-SYNC-Button dafuer kurz rot
-// aufleuchten, wenn es NICHT geklappt hat. Ohne diese sichtbare
-// Rueckmeldung sah man dem Button nicht an, ob die WLAN-Verbindung
-// fehlgeschlagen ist, der NTP-Server nicht erreichbar war, o.ae. --
-// man musste den Serial Monitor mitlaufen lassen, um ueberhaupt zu merken,
-// DASS es fehlgeschlagen ist.
+// aufleuchten, wenn es NICHT geklappt hat.
+//
+// Verbindet SELBST NICHT mehr mit dem AP -- das macht ausschliesslich der
+// WLAN/ESP-NOW-Umschalt-Button (siehe loop()). Vorher rief diese Funktion
+// bei jedem NTP-SYNC-Tastendruck WiFi.begin() neu auf und wartete bis zu
+// 10s darauf, was ESP-NOW zwischendurch unterbrach; jetzt wird nur noch
+// geprueft, ob (dank des Umschalt-Buttons) BEREITS eine WLAN-Verbindung
+// besteht.
 bool syncFromNtp() {
-  // Serial ist bei ESP32-S3-USB-CDC ein bool-Operator: liefert nur dann
-  // true, wenn tatsaechlich ein Host (Serial Monitor) verbunden ist.
-  // OHNE diese Absicherung blockiert jeder Serial.print()/println()-Aufruf
-  // hier, sobald der interne CDC-Sendepuffer vollgelaufen ist und niemand
-  // ihn ausliest -- bei bis zu 33 "."-Ausgaben waehrend der 10s-WLAN-
-  // Wartezeit summiert sich das zu einer spuerbaren Verlangsamung des
-  // gesamten Sketches (loop() haengt so lange in dieser Funktion fest).
   bool haveSerial = (bool)Serial;
-  if (haveSerial) Serial.print("Verbinde mit WLAN fuer NTP");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  uint32_t startMs = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startMs < 10000) {
-    delay(300);
-    if (haveSerial) Serial.print(".");
-  }
-  if (haveSerial) Serial.println();
   if (WiFi.status() != WL_CONNECTED) {
-    if (haveSerial) Serial.println("WLAN-Verbindung fehlgeschlagen, NTP-Sync abgebrochen.");
+    if (haveSerial) Serial.println("syncFromNtp(): WLAN nicht verbunden -- erst WLAN/ESP-NOW-Button auf WLAN stellen.");
     return false;
   }
 
@@ -847,6 +1109,15 @@ void loop() {
     checkSdCard();
   }
 
+  // WiFi.begin() (siehe WLAN/ESP-NOW-Umschalter) verbindet asynchron im
+  // Hintergrund -- ohne dieses Polling wuerde die WLAN-IP-Zeile erst nach
+  // dem naechsten Tastendruck aktualisiert, obwohl die Verbindung evtl.
+  // laengst steht. Nur aktiv, waehrend der WLAN-Modus eingeschaltet ist.
+  if (wlanModeActive && now - lastWifiPollMs >= WIFI_POLL_INTERVAL_MS) {
+    lastWifiPollMs = now;
+    updateWifiInfo();
+  }
+
   if (now - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = now;
     outgoing.counter++;
@@ -875,9 +1146,12 @@ void loop() {
     lastPn532AttemptMs = now;
     if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
       if (nfc.inListPassiveTarget()) {
-        buzzerBeep(80);
         desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
         updateUidInfo();
+        // Erst piepen, wenn der komplette Lesevorgang abgeschlossen ist --
+        // vorher piepte es sofort bei Kartenerkennung, noch bevor ueberhaupt
+        // feststand, ob/was gelesen werden konnte.
+        buzzerBeep(80);
         lastUidReadMs = now;
       }
     }
@@ -898,21 +1172,12 @@ void loop() {
     if (Serial) {
       Serial.printf("Touch: roh=(%d,%d) -> gedreht=(%d,%d)\n", rawXDbg, rawYDbg, x, y);
     }
-    if (inside(btnSetCompile, x, y)) {
-      drawButton(btnSetCompile, TFT_GREEN);
-      setRtcFromCompileTime();
-      updateRtcInfo();
-      buzzerBeep(80);
-      drawButton(btnSetCompile, TFT_DARKGREY);
-    } else if (inside(btnNtpSync, x, y)) {
+    if (inside(btnNtpSync, x, y)) {
       drawButton(btnNtpSync, TFT_GREEN);
       bool ntpOk = false;
 #ifdef USE_WIFI_NTP_SYNC
       ntpOk = syncFromNtp();
       updateRtcInfo();
-      // Auch bei fehlgeschlagenem NTP-Request aktualisieren: zeigt, ob
-      // WiFi.begin() ueberhaupt eine IP bekommen hat (siehe updateWifiInfo()).
-      updateWifiInfo();
 #else
       Serial.println("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
 #endif
@@ -924,10 +1189,23 @@ void loop() {
         delay(500);
         drawButton(btnNtpSync, TFT_DARKGREY);
       }
-    } else if (inside(btnBeep, x, y)) {
-      drawButton(btnBeep, TFT_GREEN);
-      buzzerBeep(150);
-      drawButton(btnBeep, TFT_DARKGREY);
+    } else if (inside(btnWifiToggle, x, y)) {
+      drawButton(btnWifiToggle, TFT_GREEN);
+#ifdef USE_WIFI_NTP_SYNC
+      wlanModeActive = !wlanModeActive;
+      if (wlanModeActive) {
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        Serial.println("WLAN-Modus aktiviert -- verbinde fuer NTP (siehe WLAN-IP-Zeile) ...");
+      } else {
+        WiFi.disconnect();
+        Serial.println("ESP-NOW-Modus aktiviert -- WLAN-Verbindung getrennt.");
+      }
+      updateWifiInfo();
+#else
+      Serial.println("WLAN/ESP-NOW-Umschaltung deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren.");
+#endif
+      buzzerBeep(80);
+      drawButton(btnWifiToggle, TFT_DARKGREY);
     } else if (inside(btnBrightUp, x, y)) {
       backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
       setBacklightPercent(backlightPercent);
@@ -940,7 +1218,35 @@ void loop() {
       drawButton(btnBrightDn, TFT_GREEN);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
-    } else if (y < 336) {
+    } else if (inside(btnSetMasterKey, x, y)) {
+      drawButton(btnSetMasterKey, TFT_GREEN);
+      desfireOpSetMasterKey();
+      drawButton(btnSetMasterKey, TFT_DARKGREY);
+    } else if (inside(btnResetMasterKey, x, y)) {
+      drawButton(btnResetMasterKey, TFT_GREEN);
+      desfireOpResetMasterKey();
+      drawButton(btnResetMasterKey, TFT_DARKGREY);
+    } else if (inside(btnCreateApp, x, y)) {
+      drawButton(btnCreateApp, TFT_GREEN);
+      desfireOpCreateApp();
+      drawButton(btnCreateApp, TFT_DARKGREY);
+    } else if (inside(btnDeleteApp, x, y)) {
+      drawButton(btnDeleteApp, TFT_GREEN);
+      desfireOpDeleteApp();
+      drawButton(btnDeleteApp, TFT_DARKGREY);
+    } else if (inside(btnCredit, x, y)) {
+      drawButton(btnCredit, TFT_GREEN);
+      desfireOpCredit();
+      drawButton(btnCredit, TFT_DARKGREY);
+    } else if (inside(btnDebit, x, y)) {
+      drawButton(btnDebit, TFT_GREEN);
+      desfireOpDebit();
+      drawButton(btnDebit, TFT_DARKGREY);
+    } else if (inside(btnGetValue, x, y)) {
+      drawButton(btnGetValue, TFT_GREEN);
+      desfireOpGetValue();
+      drawButton(btnGetValue, TFT_DARKGREY);
+    } else if (y < BTN_ROW1_Y) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticParts();
