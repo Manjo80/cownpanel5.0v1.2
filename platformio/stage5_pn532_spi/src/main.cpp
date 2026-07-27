@@ -645,16 +645,24 @@ void setRtcFromCompileTime() {
 // man musste den Serial Monitor mitlaufen lassen, um ueberhaupt zu merken,
 // DASS es fehlgeschlagen ist.
 bool syncFromNtp() {
-  Serial.print("Verbinde mit WLAN fuer NTP");
+  // Serial ist bei ESP32-S3-USB-CDC ein bool-Operator: liefert nur dann
+  // true, wenn tatsaechlich ein Host (Serial Monitor) verbunden ist.
+  // OHNE diese Absicherung blockiert jeder Serial.print()/println()-Aufruf
+  // hier, sobald der interne CDC-Sendepuffer vollgelaufen ist und niemand
+  // ihn ausliest -- bei bis zu 33 "."-Ausgaben waehrend der 10s-WLAN-
+  // Wartezeit summiert sich das zu einer spuerbaren Verlangsamung des
+  // gesamten Sketches (loop() haengt so lange in dieser Funktion fest).
+  bool haveSerial = (bool)Serial;
+  if (haveSerial) Serial.print("Verbinde mit WLAN fuer NTP");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   uint32_t startMs = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startMs < 10000) {
     delay(300);
-    Serial.print(".");
+    if (haveSerial) Serial.print(".");
   }
-  Serial.println();
+  if (haveSerial) Serial.println();
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WLAN-Verbindung fehlgeschlagen, NTP-Sync abgebrochen.");
+    if (haveSerial) Serial.println("WLAN-Verbindung fehlgeschlagen, NTP-Sync abgebrochen.");
     return false;
   }
 
@@ -663,7 +671,7 @@ bool syncFromNtp() {
 
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo, 10000)) {
-    Serial.println("NTP-Sync fehlgeschlagen (Timeout -- Server nicht erreichbar?).");
+    if (haveSerial) Serial.println("NTP-Sync fehlgeschlagen (Timeout -- Server nicht erreichbar?).");
     return false;
   }
 
@@ -678,10 +686,10 @@ bool syncFromNtp() {
   dt.voltageLow = false;
 
   if (rtcWrite(dt)) {
-    Serial.println("RTC per NTP synchronisiert.");
+    if (haveSerial) Serial.println("RTC per NTP synchronisiert.");
     return true;
   }
-  Serial.println("FEHLER: RTC-Schreibzugriff nach NTP-Sync fehlgeschlagen.");
+  if (haveSerial) Serial.println("FEHLER: RTC-Schreibzugriff nach NTP-Sync fehlgeschlagen.");
   return false;
 }
 #endif
@@ -826,12 +834,17 @@ void loop() {
   if (touchStandaloneGetXY(&x, &y)) {
     int32_t rawXDbg = x, rawYDbg = y;
     rotateTouchToLogical(x, y);
-    // Diagnose-Ausgabe fuer die Rotations-Transformation -- bei einem
-    // Touch-Treffer-Bug (Buttons reagieren nicht/an der falschen Stelle)
-    // zeigt der Vergleich Rohkoordinate vs. transformierte Koordinate
-    // sofort, ob/wie die Formel in rotateTouchToLogical() nicht zur
-    // tatsaechlichen Panel-Orientierung passt.
-    Serial.printf("Touch: roh=(%d,%d) -> gedreht=(%d,%d)\n", rawXDbg, rawYDbg, x, y);
+    // Diagnose-Ausgabe fuer die Rotations-Transformation -- NUR wenn
+    // tatsaechlich ein Serial Monitor verbunden ist (Serial ist bei
+    // ESP32-S3-USB-CDC ein bool-Operator dafuer). Ohne diese Absicherung
+    // blockiert Serial.printf() hier bei jedem einzelnen Touch-Poll, sobald
+    // der CDC-Sendepuffer vollgelaufen ist und niemand ihn ausliest --
+    // fuehlte sich wie extrem traege reagierende Buttons an (siehe
+    // Hardware-Test), weil loop() bei gehaltenem Finger staendig hier
+    // haengen blieb.
+    if (Serial) {
+      Serial.printf("Touch: roh=(%d,%d) -> gedreht=(%d,%d)\n", rawXDbg, rawYDbg, x, y);
+    }
     if (inside(btnSetCompile, x, y)) {
       drawButton(btnSetCompile, TFT_GREEN);
       setRtcFromCompileTime();
