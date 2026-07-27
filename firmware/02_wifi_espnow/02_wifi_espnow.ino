@@ -22,6 +22,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_heap_caps.h>
 #include "pins.h"
 #include "rgb_panel.h"
 #include "touch_standalone.h"
@@ -35,12 +36,15 @@
 #include "wifi_secrets.h"  // Kopie von wifi_secrets.example.h mit echten Daten
 #endif
 
-// Sprite ohne eigenen Speicher -- zeigt per setBuffer() direkt auf den von
-// rgbPanelInit() bereitgestellten PSRAM-Framebuffer (esp_lcd_panel_rgb mit
-// Bounce Buffer, siehe rgb_panel.h -- LovyanGFX's eigener Bus_RGB-Treiber
-// hat keinen Bounce Buffer und zeigte hartnaeckige Bildstreifen, siehe
-// firmware/README.md).
+// canvas zeigt auf einen EIGENEN PSRAM-Puffer (nicht auf einen der beiden
+// Hardware-Framebuffer von rgbPanelInit()) -- die GDMA sieht ihn nie, daher
+// ist beliebig granulares Zeichnen hier tearing-frei. rgbPanelFlush() nach
+// jeder fertigen Aenderung kopiert den Inhalt tearing-frei in die Hardware
+// (siehe Erklaerung in rgb_panel.h -- LovyanGFX's eigener Bus_RGB-Treiber
+// hatte gar keinen Anti-Tearing-Mechanismus und zeigte hartnaeckige
+// Bildstreifen, siehe firmware/README.md).
 LGFX_Sprite canvas;
+static uint16_t *g_canvasBuffer = nullptr;
 
 struct Button {
   int x, y, w, h;
@@ -165,6 +169,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   haveReceived = true;
   buzzerBeep(60);
   updateReceivedInfo();
+  rgbPanelFlush(g_canvasBuffer);
 }
 
 void setup() {
@@ -188,13 +193,21 @@ void setup() {
   touchStandaloneConfig(gtAddr);
   Serial.printf("Touch-Init -> %s\n", touchStandaloneInit() ? "OK" : "FEHLGESCHLAGEN");
 
-  Serial.println("rgbPanelInit() (esp_lcd_panel_rgb, mit Bounce Buffer) ...");
+  Serial.println("rgbPanelInit() (esp_lcd_panel_rgb, Doppelpuffer) ...");
   if (!rgbPanelInit()) {
     Serial.println("Panel-Init fehlgeschlagen -- Sketch haelt an.");
     while (true) { delay(1000); }
   }
+
+  // Eigener PSRAM-Puffer fuer canvas (siehe rgb_panel.h) -- NICHT einer der
+  // beiden Hardware-Framebuffer, die esp_lcd_panel_rgb intern verwaltet.
+  g_canvasBuffer = (uint16_t *)heap_caps_malloc((size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+  if (g_canvasBuffer == nullptr) {
+    Serial.println("Canvas-Speicher (PSRAM) konnte nicht allokiert werden -- Sketch haelt an.");
+    while (true) { delay(1000); }
+  }
   canvas.setColorDepth(16);
-  canvas.setBuffer(g_rgbFrameBuffer, LCD_WIDTH, LCD_HEIGHT, 16);
+  canvas.setBuffer(g_canvasBuffer, LCD_WIDTH, LCD_HEIGHT, 16);
 
   setBacklightPercent(backlightPercent);
 
@@ -233,6 +246,7 @@ void setup() {
   drawStaticParts();
   updateSendInfo();
   updateReceivedInfo();
+  rgbPanelFlush(g_canvasBuffer);
   Serial.println("Setup fertig.");
 }
 
@@ -243,32 +257,40 @@ void loop() {
     outgoing.counter++;
     esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
     updateSendInfo();
+    rgbPanelFlush(g_canvasBuffer);
   }
 
   int32_t x, y;
   if (touchStandaloneGetXY(&x, &y)) {
     if (inside(btnBeep, x, y)) {
       drawButton(btnBeep, TFT_GREEN);
+      rgbPanelFlush(g_canvasBuffer);
       buzzerBeep(150);
       drawButton(btnBeep, TFT_DARKGREY);
+      rgbPanelFlush(g_canvasBuffer);
     } else if (inside(btnBrightUp, x, y)) {
       backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
       setBacklightPercent(backlightPercent);
       drawButton(btnBrightUp, TFT_GREEN);
+      rgbPanelFlush(g_canvasBuffer);
       delay(80);
       drawButton(btnBrightUp, TFT_DARKGREY);
+      rgbPanelFlush(g_canvasBuffer);
     } else if (inside(btnBrightDn, x, y)) {
       backlightPercent = (backlightPercent >= 10) ? backlightPercent - 10 : 0;
       setBacklightPercent(backlightPercent);
       drawButton(btnBrightDn, TFT_GREEN);
+      rgbPanelFlush(g_canvasBuffer);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
+      rgbPanelFlush(g_canvasBuffer);
     } else if (y < 380) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticParts();
       updateSendInfo();
       updateReceivedInfo();
+      rgbPanelFlush(g_canvasBuffer);
     }
 
     delay(150); // einfaches Debounce

@@ -6,8 +6,8 @@ in der sie üblicherweise ans Laufen gebracht werden:
 
 | Ordner | Testet | Status |
 |---|---|---|
-| `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | fertig, RGB-Ausgabe auf esp_lcd_panel_rgb umgebaut (siehe unten), an echter Hardware verifiziert (sauberes Bild, Touch nach Stromlos-Start OK) |
-| `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | auf esp_lcd_panel_rgb umgebaut, wird getestet |
+| `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | fertig, RGB-Ausgabe auf esp_lcd_panel_rgb mit Doppelpuffer umgebaut (siehe unten); Bounce-Buffer-Version an echter Hardware verifiziert, Doppelpuffer-Version noch nicht erneut getestet |
+| `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | auf esp_lcd_panel_rgb mit Doppelpuffer umgebaut; funktional an echter Hardware verifiziert (2 Boards), Bounce-Buffer-Version zeigte noch schwache Text-"Geister" bei Teil-Redraws — Doppelpuffer-Version soll das beheben, noch nicht erneut getestet |
 | `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync | fertig (nutzt noch LovyanGFX Bus_RGB) |
 | `04_sd_card/` | SD-/TF-Karte über SPI | fertig (nutzt noch LovyanGFX Bus_RGB) |
 | `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) | fertig (nutzt noch LovyanGFX Bus_RGB) |
@@ -17,23 +17,41 @@ in der sie üblicherweise ans Laufen gebracht werden:
 Hartnäckige Bildstreifen/-fehler auf Buttons ließen sich mit reinen
 LovyanGFX-Anpassungen (Sprite-Puffer, `waitDMA()`, PSRAM-Takt, Pixeltakt)
 nicht beheben. Wahrscheinliche Ursache: LovyanGFX's `Bus_RGB`-Treiber hat
-keinen "Bounce Buffer" — bei ESP32-S3-RGB-Panels mit PSRAM-Framebuffer ist
-das ein bekanntes Problem, da CPU-Schreibzugriffe (Zeichnen) mit der
-kontinuierlichen GDMA-Bildausgabe um dieselbe PSRAM-Bandbreite konkurrieren.
-Espressifs eigener ESP-IDF-Treiber (`esp_lcd_panel_rgb`) hat dafür einen
-Bounce Buffer (kleiner SRAM-Zwischenpuffer) eingebaut.
+keinen Anti-Tearing-Mechanismus — bei ESP32-S3-RGB-Panels mit PSRAM-
+Framebuffer ist das ein bekanntes Problem, da CPU-Schreibzugriffe (Zeichnen)
+mit der kontinuierlichen GDMA-Bildausgabe um dieselbe PSRAM-Bandbreite
+konkurrieren bzw. denselben Speicher gleichzeitig lesen/schreiben.
 
 `01_display_touch_buzzer` und `02_wifi_espnow` nutzen deshalb jetzt
 `esp_lcd_panel_rgb` direkt für die Hardware-Ausgabe (`rgb_panel.h`) und
 GT911-Touch eigenständig ohne LGFX-Device (`touch_standalone.h`). LovyanGFX
-wird nur noch für die Zeichen-API genutzt: `LGFX_Sprite canvas` zeigt per
-`setBuffer()` direkt auf den von `esp_lcd_panel_rgb` bereitgestellten
-Framebuffer. Zusätzlich wartet `setup()` 600 ms zwischen `Wire.begin()` und
-der ersten Touch-Kommunikation, da der GT911 nach einem echten
-Stromlos-Start selbst noch Boot-Zeit braucht (nach Reset-Knopf fällt das
-nicht auf, da der Chip dort schon läuft). Die Stages 3-5 nutzen noch die
-alte LovyanGFX-Bus_RGB-Variante — werden erst umgestellt, sobald sich der
-Ansatz in den ersten beiden Stages bewährt hat.
+wird nur noch für die Zeichen-API genutzt. Zusätzlich wartet `setup()`
+600 ms zwischen `Wire.begin()` und der ersten Touch-Kommunikation, da der
+GT911 nach einem echten Stromlos-Start selbst noch Boot-Zeit braucht (nach
+Reset-Knopf fällt das nicht auf, da der Chip dort schon läuft). Die Stages
+3-5 nutzen noch die alte LovyanGFX-Bus_RGB-Variante — werden erst
+umgestellt, sobald sich der Ansatz in den ersten beiden Stages bewährt hat.
+
+**Zwei Anlauf-Versuche gegen Bildfehler, in dieser Reihenfolge probiert:**
+
+1. *Bounce Buffer* (`bounce_buffer_size_px`, ein Modus von
+   `esp_lcd_panel_rgb`): kleiner SRAM-Zwischenpuffer, den die GDMA ausliest,
+   während er im Hintergrund aus dem PSRAM-Framebuffer nachgefüllt wird —
+   löste die groben Streifen, aber bei Stage 2 zeigten sich beim häufigen
+   Teil-Redraw des Statustexts (ESP-NOW-Zähler alle 2s) noch schwache
+   "Geister"-Reste alter Textzeilen. Grund: `canvas` zeigte per `setBuffer()`
+   direkt auf den EINEN Hardware-Framebuffer — ein Teil-Redraw kann also
+   trotzdem genau in dem Moment hineinschreiben, in dem die GDMA denselben
+   Bereich gerade ausliest.
+2. *Doppelter Framebuffer* (`num_fbs = 2`, jetzt aktiv — laut ESP-IDF nicht
+   gleichzeitig mit dem Bounce Buffer nutzbar): `canvas` zeigt jetzt auf
+   einen dritten, eigenen PSRAM-Puffer, den die GDMA nie sieht — darin darf
+   beliebig granular gezeichnet werden, ganz ohne Tearing-Risiko. Erst
+   `rgbPanelFlush()` kopiert den fertigen Inhalt in den gerade inaktiven
+   Hardware-Framebuffer; der sichtbare Umschalt-Zeitpunkt liegt beim
+   nächsten VSYNC. Kostet zusätzlichen PSRAM (bei 800x480x16bpp: 2 x 750 KiB
+   für die Hardware-Puffer + 750 KiB für `canvas` selbst), aber bei 8 MiB
+   PSRAM kein Problem.
 
 Jeder Ordner ist ein vollständiger, eigenständiger Arduino-Sketch (Ordnername
 = `.ino`-Dateiname, wie von der Arduino-IDE verlangt) und enthält seine
