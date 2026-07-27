@@ -295,7 +295,7 @@ void formatTimestamp(char *buf, size_t bufLen) {
     snprintf(buf, bufLen, "%04u-%02u-%02u %02u:%02u:%02u",
              dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
   } else {
-    snprintf(buf, bufLen, "????-??-?? ??:??:??");
+    snprintf(buf, bufLen, "0000-00-00 00:00:00"); // RTC nicht lesbar
   }
 }
 

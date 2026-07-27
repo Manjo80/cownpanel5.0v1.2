@@ -1,3 +1,11 @@
 # Absichtlich (fast) leer -- Stage 1 nutzt kein LVGL, daher sind Elecrows
 # LVGL-spezifische Zeilen aus dieser Datei entfernt. Die eigentlich wichtige
 # Datei ist sdkconfig.defaults.esp32s3 (PSRAM-Taktrate).
+
+# DES/2K3DES fuer die DESFire-Legacy-Authentifizierung (desfire.h,
+# mbedtls_des3_*). ESP-IDFs mbedtls-Komponente kompiliert DES standardmaessig
+# NICHT mit ein (als veraltete Cipher betrachtet, spart Flash) -- ohne diese
+# Zeile schlaegt das Linken mit "undefined reference to mbedtls_des3_init"
+# u.ae. fehl. mbedtls_aes_* (fuer die AES-Authentifizierung) ist bereits
+# Teil der Standard-mbedtls-Konfiguration, braucht keinen eigenen Schalter.
+CONFIG_MBEDTLS_DES_C=y

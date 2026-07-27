@@ -291,6 +291,19 @@ App(s), 1 authentifiziert, siehe SD-Log`).
   Serial-Ausgaben an jedem Protokollschritt helfen, einen echten Bug von
   "Karte hat andere Schlüssel" zu unterscheiden.
 
+**Build-Fehler `undefined reference to mbedtls_des3_init` (u. ä.):**
+ESP-IDFs mbedtls-Komponente kompiliert DES/2K3DES standardmäßig NICHT mit
+ein (als veraltete Cipher betrachtet, spart Flash) — nur
+`mbedtls_aes_*` (für die AES-Authentifizierung) ist Teil der
+Standardkonfiguration. Für PlatformIO ist das bereits behoben:
+`platformio/stage5_pn532_spi/sdkconfig.defaults` setzt
+`CONFIG_MBEDTLS_DES_C=y`. **Arduino-IDE-Nutzer:** der vorkompilierte
+ESP32-Core bringt mbedtls bereits fertig gebaut mit — ob `mbedtls_des3_*`
+darin enthalten ist, hängt von der jeweiligen Core-Version ab und lässt
+sich nicht einfach per Menü umschalten. Bekommst du denselben Linker-Fehler
+in der Arduino IDE, ist PlatformIO (wo die Kconfig-Option zur Verfügung
+steht) hier der zuverlässigere Weg.
+
 ## 9. Ausblick — nicht Teil dieser fünf Stages
 
 - Kombiniertes Gesamtprojekt, das alle Subsysteme gleichzeitig nutzt.
