@@ -33,15 +33,35 @@
 // dritten, eigenen PSRAM-Puffer, den die GDMA nie sieht. Darin darf beliebig
 // oft und beliebig granular (Teil-Redraws) gezeichnet werden, ohne jemals
 // Tearing zu riskieren. Erst wenn eine zusammengehoerige Aenderung fertig
-// ist, wird ihr kompletter Inhalt per rgbPanelFlush() in den Hardware-
-// Doppelpuffer kopiert.
+// ist, wird sie per rgbPanelFlush() (ganzer Schirm) oder rgbPanelFlushRect()
+// (nur ein Teilbereich, viel billiger) in die Hardware kopiert.
+//
+// WICHTIG bei num_fbs = 2: draw_bitmap() aktualisiert pro Aufruf nur EINEN
+// der beiden Framebuffer (den gerade inaktiven) und tauscht ihn dann um.
+// Ein einzelner Flush pro Aenderung wuerde also nur einen der beiden
+// Framebuffer aktuell halten -- beim naechsten Tausch springt das Bild kurz
+// auf den alten Inhalt des anderen Framebuffers zurueck ("Zittern" bei
+// haeufigen kleinen Updates). Deshalb rufen rgbPanelFlush()/
+// rgbPanelFlushRect() draw_bitmap() intern zweimal auf, damit beide
+// Framebuffer synchron bleiben. Ausserdem kopiert ein Vollbild-Flush bei
+// jedem kleinen Update unnoetig viele Daten durchs PSRAM (das war der
+// eigentliche Grund fuer das Zittern, das nach der ersten Doppelpuffer-
+// Version auftrat) -- deshalb rgbPanelFlushRect() fuer alles, was nicht den
+// ganzen Schirm betrifft.
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "pins.h"
 
 static esp_lcd_panel_handle_t g_rgbPanelHandle = nullptr;
+
+// Scratch-Puffer fuer rgbPanelFlushRect() (siehe dort) -- 100 Zeilen reichen
+// mit Reserve fuer alle bisher genutzten schmalen Teilbereiche (Buttons:
+// 60px hoch). Bei Bedarf erhoehen.
+static const int RGB_FLUSH_SCRATCH_MAX_H = 100;
+static uint16_t *g_flushScratch = nullptr;
 
 inline bool rgbPanelInit() {
   esp_lcd_rgb_panel_config_t panel_config = {};
@@ -117,15 +137,72 @@ inline bool rgbPanelInit() {
     return false;
   }
 
+  // Scratch-Puffer fuer rgbPanelFlushRect() -- siehe dort. Einmalig hier
+  // allokiert, nicht bei jedem Aufruf (waere langsam und wuerde den Heap
+  // fragmentieren).
+  g_flushScratch = (uint16_t *)heap_caps_malloc(
+      (size_t)LCD_WIDTH * RGB_FLUSH_SCRATCH_MAX_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+  if (g_flushScratch == nullptr) {
+    Serial.println("Scratch-Puffer fuer rgbPanelFlushRect() fehlgeschlagen.");
+    return false;
+  }
+
   return true;
 }
 
 // Kopiert den kompletten Inhalt von buf (muss LCD_WIDTH x LCD_HEIGHT Pixel
-// im 16bpp-Format des canvas-Sprites sein) in den aktuell inaktiven
-// Hardware-Framebuffer und macht ihn erst beim naechsten VSYNC sichtbar --
-// tearing-frei dank num_fbs = 2 oben. Nach jeder zusammengehoerigen
-// Zeichenoperation auf "canvas" einmal aufrufen (nicht nach jedem einzelnen
-// fillRect/drawString -- das waere unnoetig teuer).
-inline void rgbPanelFlush(void *buf) {
+// im 16bpp-Format des canvas-Sprites sein) in BEIDE Hardware-Framebuffer und
+// macht ihn tearing-frei sichtbar. Fuer echte Vollbild-Aenderungen (z. B.
+// Hintergrundfarbwechsel) -- fuer kleine Teil-Redraws (Button, einzelne
+// Textzeile) bitte rgbPanelFlushRect() nutzen, das ist deutlich billiger.
+//
+// WARUM ZWEIMAL: esp_lcd_panel_draw_bitmap() schreibt immer in den gerade
+// INAKTIVEN Framebuffer und tauscht ihn dann sichtbar um (num_fbs = 2, siehe
+// oben). Ein einzelner Aufruf aktualisiert also nur EINEN der beiden
+// Framebuffer -- der andere behaelt seinen alten Inhalt, bis er das naechste
+// Mal an der Reihe ist. Bei Teil-Redraws faellt das als kurzes Zurueckspringen
+// auf den alten Zustand auf ("Zittern"). Zweimal hintereinander aufrufen
+// sorgt dafuer, dass BEIDE Framebuffer denselben aktuellen Inhalt bekommen.
+inline void rgbPanelFlush(const void *buf) {
   esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, 0, 0, LCD_WIDTH, LCD_HEIGHT, buf);
+  esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, 0, 0, LCD_WIDTH, LCD_HEIGHT, buf);
+}
+
+// Aktualisiert NUR das Rechteck (x, y, w, h) tearing-frei -- viel billiger
+// als rgbPanelFlush(), da nicht der ganze 800x480-Schirm kopiert wird,
+// sondern nur der tatsaechlich geaenderte Bereich (z. B. ein Button oder
+// eine einzelne Statuszeile). canvasBuf muss derselbe Puffer sein, in den
+// vorher gezeichnet wurde (LCD_WIDTH Pixel pro Zeile, 16bpp).
+//
+// h darf RGB_FLUSH_SCRATCH_MAX_H nicht ueberschreiten (siehe Scratch-Puffer
+// oben) -- fuer alle bisherigen Teil-Redraws (Buttons: 60px hoch) reicht das
+// mit Reserve. Bei neuen, hoeheren Teilbereichen ggf. RGB_FLUSH_SCRATCH_MAX_H
+// erhoehen.
+inline void rgbPanelFlushRect(const uint16_t *canvasBuf, int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0 || g_flushScratch == nullptr) return;
+
+  if (x == 0 && w == LCD_WIDTH) {
+    // Volle Breite -- die Zeilen liegen im canvas bereits ohne Luecken
+    // hintereinander (Stride == Breite), kein Umkopieren noetig.
+    const uint16_t *src = canvasBuf + (size_t)y * LCD_WIDTH;
+    esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, x, y, x + w, y + h, src);
+    esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, x, y, x + w, y + h, src);
+    return;
+  }
+
+  if (h > RGB_FLUSH_SCRATCH_MAX_H) {
+    Serial.println("rgbPanelFlushRect(): Bereich zu hoch fuer Scratch-Puffer -- RGB_FLUSH_SCRATCH_MAX_H erhoehen.");
+    return;
+  }
+
+  // Schmalerer Bereich (z. B. ein Button): canvas hat Stride == LCD_WIDTH,
+  // nicht w -- fuer draw_bitmap() muss das Rechteck eng gepackt (ohne
+  // Zeilenluecken) vorliegen, deshalb hier Zeile fuer Zeile umkopieren.
+  for (int row = 0; row < h; row++) {
+    memcpy(g_flushScratch + (size_t)row * w,
+           canvasBuf + (size_t)(y + row) * LCD_WIDTH + x,
+           (size_t)w * sizeof(uint16_t));
+  }
+  esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, x, y, x + w, y + h, g_flushScratch);
+  esp_lcd_panel_draw_bitmap(g_rgbPanelHandle, x, y, x + w, y + h, g_flushScratch);
 }

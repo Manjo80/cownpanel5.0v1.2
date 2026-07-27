@@ -176,28 +176,28 @@ void loop() {
 
     if (inside(btnBeep, x, y)) {
       drawButton(btnBeep, TFT_GREEN);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBeep.x, btnBeep.y, btnBeep.w, btnBeep.h);
       buzzerBeep(150);
       drawButton(btnBeep, TFT_DARKGREY);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBeep.x, btnBeep.y, btnBeep.w, btnBeep.h);
     } else if (inside(btnBrightUp, x, y)) {
       backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
       setBacklightPercent(backlightPercent);
       Serial.printf("Backlight: %d%%\n", backlightPercent);
       drawButton(btnBrightUp, TFT_GREEN);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightUp.x, btnBrightUp.y, btnBrightUp.w, btnBrightUp.h);
       delay(80);
       drawButton(btnBrightUp, TFT_DARKGREY);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightUp.x, btnBrightUp.y, btnBrightUp.w, btnBrightUp.h);
     } else if (inside(btnBrightDn, x, y)) {
       backlightPercent = (backlightPercent >= 10) ? backlightPercent - 10 : 0;
       setBacklightPercent(backlightPercent);
       Serial.printf("Backlight: %d%%\n", backlightPercent);
       drawButton(btnBrightDn, TFT_GREEN);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightDn.x, btnBrightDn.y, btnBrightDn.w, btnBrightDn.h);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
-      rgbPanelFlush(g_canvasBuffer);
+      rgbPanelFlushRect(g_canvasBuffer, btnBrightDn.x, btnBrightDn.y, btnBrightDn.w, btnBrightDn.h);
     } else if (y < 380) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));

@@ -32,7 +32,7 @@ Reset-Knopf fällt das nicht auf, da der Chip dort schon läuft). Die Stages
 3-5 nutzen noch die alte LovyanGFX-Bus_RGB-Variante — werden erst
 umgestellt, sobald sich der Ansatz in den ersten beiden Stages bewährt hat.
 
-**Zwei Anlauf-Versuche gegen Bildfehler, in dieser Reihenfolge probiert:**
+**Drei Anlauf-Versuche gegen Bildfehler, in dieser Reihenfolge probiert:**
 
 1. *Bounce Buffer* (`bounce_buffer_size_px`, ein Modus von
    `esp_lcd_panel_rgb`): kleiner SRAM-Zwischenpuffer, den die GDMA ausliest,
@@ -43,15 +43,27 @@ umgestellt, sobald sich der Ansatz in den ersten beiden Stages bewährt hat.
    direkt auf den EINEN Hardware-Framebuffer — ein Teil-Redraw kann also
    trotzdem genau in dem Moment hineinschreiben, in dem die GDMA denselben
    Bereich gerade ausliest.
-2. *Doppelter Framebuffer* (`num_fbs = 2`, jetzt aktiv — laut ESP-IDF nicht
-   gleichzeitig mit dem Bounce Buffer nutzbar): `canvas` zeigt jetzt auf
-   einen dritten, eigenen PSRAM-Puffer, den die GDMA nie sieht — darin darf
-   beliebig granular gezeichnet werden, ganz ohne Tearing-Risiko. Erst
-   `rgbPanelFlush()` kopiert den fertigen Inhalt in den gerade inaktiven
-   Hardware-Framebuffer; der sichtbare Umschalt-Zeitpunkt liegt beim
-   nächsten VSYNC. Kostet zusätzlichen PSRAM (bei 800x480x16bpp: 2 x 750 KiB
-   für die Hardware-Puffer + 750 KiB für `canvas` selbst), aber bei 8 MiB
-   PSRAM kein Problem.
+2. *Doppelter Framebuffer, komplettes Vollbild-Flush pro Änderung*
+   (`num_fbs = 2`, laut ESP-IDF nicht gleichzeitig mit dem Bounce Buffer
+   nutzbar): `canvas` zeigt auf einen dritten, eigenen PSRAM-Puffer, den die
+   GDMA nie sieht — darin darf beliebig granular gezeichnet werden, ganz
+   ohne Tearing-Risiko. Ein `rgbPanelFlush()`, das nach **jeder** Änderung
+   den **kompletten** 800x480-Schirm in den Hardware-Framebuffer kopiert,
+   machte die Sache aber schlimmer statt besser: selbst ein einzelner
+   Button-Tastendruck erzeugte plötzlich 750 KiB PSRAM-Traffic statt nur ein
+   paar KiB — das erzeugte spürbares "Zittern" bei jedem kleinen Update
+   (mehr Bandbreitenkonkurrenz mit der GDMA-Ausgabe als vorher, nicht
+   weniger).
+3. *Doppelter Framebuffer, gezieltes Teil-Rechteck-Flush* (jetzt aktiv):
+   `rgbPanelFlushRect(canvasBuf, x, y, w, h)` kopiert nur den tatsächlich
+   geänderten Bereich (z. B. einen 220x60-Button statt des ganzen Schirms).
+   Da `esp_lcd_panel_draw_bitmap()` bei `num_fbs = 2` pro Aufruf nur EINEN
+   der beiden Framebuffer aktualisiert (den gerade inaktiven) und dann
+   umschaltet, rufen `rgbPanelFlush()`/`rgbPanelFlushRect()` das intern
+   zweimal auf — sonst würde beim nächsten Umschalten kurz der alte Inhalt
+   des jeweils anderen Framebuffers aufblitzen. Volle Vollbild-Flushes
+   (`rgbPanelFlush()`) bleiben nur noch für echte Vollbild-Änderungen übrig
+   (Start, Hintergrundfarbwechsel).
 
 Jeder Ordner ist ein vollständiger, eigenständiger Arduino-Sketch (Ordnername
 = `.ino`-Dateiname, wie von der Arduino-IDE verlangt) und enthält seine
