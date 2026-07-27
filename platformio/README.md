@@ -49,7 +49,7 @@ Extension baut die Python-Umgebung automatisch neu auf.
 | `stage2_wifi_espnow/` | `firmware/02_wifi_espnow/` | Ja — an echter Hardware verifiziert (2 Boards) |
 | `stage3_rtc/` | `firmware/03_rtc/` | Ja — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt), an echter Hardware verifiziert |
 | `stage4_sd_card/` | `firmware/04_sd_card/` | Ja — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben), an echter Hardware verifiziert |
-| `stage5_pn532_spi/` | `firmware/05_pn532_spi/` | Ja — Erweiterung von Stage 4 (SD, RTC, WLAN/ESP-NOW bleiben), kompakteres Layout, wird getestet |
+| `stage5_pn532_spi/` | `firmware/05_pn532_spi/` | Ja — Erweiterung von Stage 4 (SD, RTC, WLAN/ESP-NOW bleiben), kompakteres Layout, inkl. DESFire-Tiefenauslesung (`include/desfire.h`, siehe `firmware/README.md` Abschnitt 8) — DESFire-Teil ungetestet, wird getestet |
 
 Jeder Stage-Ordner enthält:
 
@@ -81,3 +81,6 @@ zugrundeliegende ESP-IDF-Konfiguration einspeist.
   nötigen Patches (siehe `firmware/README.md` Abschnitt 3) — die müssen
   nach dem ersten Build manuell in
   `.pio/libdeps/advance-hmi/Adafruit PN532/` nachgetragen werden.
+- `include/desfire.h` nutzt `mbedtls/des.h`, `mbedtls/aes.h` und
+  `esp_random.h` — alles Teil des ESP-IDF-Kerns, keine zusätzliche
+  `lib_deps`-Zeile nötig.

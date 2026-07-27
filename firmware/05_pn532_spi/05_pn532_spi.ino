@@ -49,6 +49,7 @@
 #include "touch_probe.h"
 #include "backlight_buzzer.h"
 #include "rtc_pcf8563.h"
+#include "desfire.h"
 
 // Fuer echten NTP-Abgleich einkommentieren und wifi_secrets.h anlegen
 // (Kopie von wifi_secrets.example.h in diesem Ordner, eigene Zugangsdaten
@@ -78,12 +79,14 @@ struct Button {
 };
 
 // Kompakteres Layout als in Stage 4 (siehe update*Info()-Bereichsgrenzen
-// unten) -- bewusst dichter gepackt statt Funktionen wegzulassen.
-Button btnSetCompile = { 40,  346, 340, 46, "STELLEN (Compile-Zeit)" };
-Button btnNtpSync    = { 420, 346, 340, 46, "NTP-SYNC" };
-Button btnBeep       = { 40,  400, 220, 48, "BEEP" };
-Button btnBrightUp   = { 300, 400, 220, 48, "BACKLIGHT +" };
-Button btnBrightDn   = { 560, 400, 220, 48, "BACKLIGHT -" };
+// unten) -- bewusst dichter gepackt statt Funktionen wegzulassen. Nochmal
+// etwas enger als beim ersten Stage-5-Layout, um Platz fuer die zweite
+// Zeile (DESFire-Zusammenfassung) im UID-Bereich zu schaffen.
+Button btnSetCompile = { 40,  358, 340, 42, "STELLEN (Compile-Zeit)" };
+Button btnNtpSync    = { 420, 358, 340, 42, "NTP-SYNC" };
+Button btnBeep       = { 40,  408, 220, 46, "BEEP" };
+Button btnBrightUp   = { 300, 408, 220, 46, "BACKLIGHT +" };
+Button btnBrightDn   = { 560, 408, 220, 46, "BACKLIGHT -" };
 
 uint8_t backlightPercent = 80;
 
@@ -129,6 +132,11 @@ bool pn532Ready = false;
 char pn532StatusMsg[64] = "PN532: wird geprueft...";
 uint16_t pn532StatusColor = TFT_LIGHTGREY;
 char uidMsg[64] = "Noch keine Karte gelesen.";
+// DESFire-Tiefenauslesung (siehe desfire.h + desfireDeepRead() unten) --
+// Details landen in DESFIRE_LOG_PATH auf der SD-Karte, hier nur die kurze
+// Ein-Zeilen-Zusammenfassung fuers Display.
+char desfireSummaryMsg[80] = "";
+const char *DESFIRE_LOG_PATH = "/desfire_log.txt";
 uint32_t lastPn532AttemptMs = 0;
 uint32_t lastUidReadMs = 0;
 
@@ -139,9 +147,10 @@ uint32_t lastUidReadMs = 0;
 const int SD_INFO_Y = 112, SD_INFO_H = 26;
 const int RTC_INFO_Y = 142, RTC_INFO_H = 34;
 const int PN532_INFO_Y = 180, PN532_INFO_H = 26;
-const int SEND_INFO_Y = 210, SEND_INFO_H = 46;
-const int RECV_INFO_Y = 260, RECV_INFO_H = 48;
-const int UID_INFO_Y = 312, UID_INFO_H = 26;
+const int SEND_INFO_Y = 210, SEND_INFO_H = 42;
+const int RECV_INFO_Y = 256, RECV_INFO_H = 40;
+// UID_INFO jetzt zweizeilig: UID selbst + DESFire-Zusammenfassung darunter.
+const int UID_INFO_Y = 300, UID_INFO_H = 50;
 
 void drawButton(const Button &b, uint16_t fill) {
   canvas.fillRoundRect(b.x, b.y, b.w, b.h, 8, fill);
@@ -229,10 +238,10 @@ void updateSendInfo() {
   canvas.setTextSize(2);
 
   canvas.setTextColor(TFT_WHITE);
-  canvas.setCursor(20, SEND_INFO_Y + 6);
+  canvas.setCursor(20, SEND_INFO_Y + 4);
   canvas.printf("ESP-NOW gesendet: %lu\n", (unsigned long)outgoing.counter);
 
-  canvas.setCursor(20, SEND_INFO_Y + 26);
+  canvas.setCursor(20, SEND_INFO_Y + 22);
   if (haveSendResult) {
     canvas.setTextColor(lastSendOk ? TFT_GREENYELLOW : TFT_RED);
     canvas.printf("Letzter Sendestatus: %s\n", lastSendOk ? "OK" : "FEHLER");
@@ -254,15 +263,16 @@ void updateReceivedInfo() {
     canvas.printf("Empfangen von %02X:%02X:%02X:%02X:%02X:%02X:\n",
                   lastSrcMac[0], lastSrcMac[1], lastSrcMac[2],
                   lastSrcMac[3], lastSrcMac[4], lastSrcMac[5]);
-    canvas.setCursor(20, RECV_INFO_Y + 26);
+    canvas.setCursor(20, RECV_INFO_Y + 22);
     canvas.printf("\"%s\" (Zaehler %lu)", lastReceived.text, (unsigned long)lastReceived.counter);
   } else {
     canvas.println("Noch keine ESP-NOW-Nachricht empfangen.");
   }
 }
 
-// Nur die zuletzt gelesene NFC-Karten-UID -- wird ausschliesslich aus
-// loop()s PN532-Polling aufgerufen.
+// UID-Zeile + darunter eine kurze DESFire-Zusammenfassung (Details stehen
+// in /desfire_log.txt auf der SD-Karte, siehe desfireDeepRead()) -- wird
+// ausschliesslich aus loop()s PN532-Polling aufgerufen.
 void updateUidInfo() {
   canvas.fillRect(0, UID_INFO_Y, LCD_WIDTH, UID_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
@@ -270,6 +280,9 @@ void updateUidInfo() {
   canvas.setTextColor(TFT_GREENYELLOW);
   canvas.setCursor(20, UID_INFO_Y + 3);
   canvas.print(uidMsg);
+  canvas.setTextColor(TFT_LIGHTGREY);
+  canvas.setCursor(20, UID_INFO_Y + 26);
+  canvas.print(desfireSummaryMsg);
 }
 
 // Aktuelle RTC-Zeit als "YYYY-MM-DD hh:mm:ss" -- fuer Log-Zeitstempel.
@@ -391,6 +404,130 @@ bool pn532Begin() {
   Serial.printf("pn532Begin(): %s\n", pn532StatusMsg);
   nfc.SAMConfig();
   return true;
+}
+
+// Fuehrt einen vollstaendigen DESFire-Lesevorgang durch: GetVersion, Liste
+// der Anwendungen (AIDs), pro Anwendung Authentifizierung mit dem Default-
+// Schluessel (16 Nullbytes, probiert erst 2K3DES dann AES -- siehe
+// desfire.h) + Datei-Liste + Dateiinhalte wo moeglich (Enciphered-Dateien
+// werden erkannt, aber nicht entschluesselt -- siehe Kopfkommentar in
+// desfire.h). Alle Details landen mit RTC-Zeitstempel in DESFIRE_LOG_PATH
+// auf der SD-Karte (nur wenn sie gerade gemountet ist); desfireSummaryMsg
+// bekommt eine kurze Ein-Zeilen-Zusammenfassung fuers Display.
+//
+// WICHTIG: Dieser Code wurde an keiner echten DESFire-Karte getestet
+// (siehe desfire.h). Schlaegt die Authentifizierung fehl, ist die
+// wahrscheinlichste Erklaerung, dass die Karte nicht mehr die
+// Werksschluessel hat (normal bei den meisten Karten aus dem echten
+// Einsatz) -- kein Grund zur Sorge, kein Bug.
+void desfireDeepRead() {
+  File log;
+  bool haveLog = false;
+  if (sdMounted) {
+    log = SD.open(DESFIRE_LOG_PATH, FILE_APPEND);
+    haveLog = (bool)log;
+    if (haveLog) {
+      char ts[32];
+      formatTimestamp(ts, sizeof(ts));
+      log.printf("=== DESFire-Lesevorgang %s ===\n", ts);
+    } else {
+      Serial.println("desfireDeepRead(): SD.open() fehlgeschlagen, logge nur nach Serial.");
+    }
+  }
+
+  DesfireVersion ver;
+  if (!desfireGetVersion(ver)) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Kein DESFire (GetVersion fehlgeschlagen)");
+    if (haveLog) {
+      log.println("GetVersion fehlgeschlagen -- keine DESFire-Karte oder Kommunikationsfehler.");
+      log.close();
+    }
+    return;
+  }
+
+  if (haveLog) {
+    log.printf("HW: Vendor=0x%02X Type=0x%02X SubType=0x%02X Version=%u.%u StorageSize=0x%02X Protocol=0x%02X\n",
+               ver.hwVendorId, ver.hwType, ver.hwSubType, ver.hwMajorVersion, ver.hwMinorVersion,
+               ver.hwStorageSize, ver.hwProtocol);
+    log.printf("SW: Vendor=0x%02X Type=0x%02X SubType=0x%02X Version=%u.%u StorageSize=0x%02X Protocol=0x%02X\n",
+               ver.swVendorId, ver.swType, ver.swSubType, ver.swMajorVersion, ver.swMinorVersion,
+               ver.swStorageSize, ver.swProtocol);
+    log.printf("UID: %02X:%02X:%02X:%02X:%02X:%02X:%02X\n",
+               ver.uid[0], ver.uid[1], ver.uid[2], ver.uid[3], ver.uid[4], ver.uid[5], ver.uid[6]);
+    log.printf("Batch: %02X%02X%02X%02X%02X, Produktion: Woche %u / 20%02u\n",
+               ver.batchNo[0], ver.batchNo[1], ver.batchNo[2], ver.batchNo[3], ver.batchNo[4],
+               ver.productionWeek, ver.productionYear);
+  }
+
+  uint8_t aids[28][3];
+  uint8_t appCount = desfireGetApplicationIDs(aids, 28);
+  if (haveLog) log.printf("Anwendungen (AIDs): %u\n", appCount);
+
+  uint8_t authedApps = 0;
+  for (uint8_t a = 0; a < appCount; a++) {
+    if (haveLog) log.printf("-- AID %02X%02X%02X --\n", aids[a][2], aids[a][1], aids[a][0]);
+    if (!desfireSelectApplication(aids[a])) {
+      if (haveLog) log.println("   SelectApplication fehlgeschlagen, ueberspringe.");
+      continue;
+    }
+
+    uint8_t sessionKey[16];
+    const char *cipherName;
+    if (!desfireAuthDefaultKey(0, sessionKey, &cipherName)) {
+      if (haveLog) log.println("   Authentifizierung mit Default-Schluessel (2K3DES/AES) fehlgeschlagen -- "
+                                "Karte hat vermutlich andere Schluessel.");
+      continue;
+    }
+    authedApps++;
+    if (haveLog) log.printf("   Authentifiziert mit Default-Schluessel (%s).\n", cipherName);
+
+    uint8_t fileIds[32];
+    uint8_t fileCount = desfireGetFileIDs(fileIds, 32);
+    if (haveLog) log.printf("   Dateien: %u\n", fileCount);
+
+    for (uint8_t f = 0; f < fileCount; f++) {
+      DesfireFileSettings fs;
+      if (!desfireGetFileSettings(fileIds[f], fs)) {
+        if (haveLog) log.printf("   Datei %u: GetFileSettings fehlgeschlagen.\n", fileIds[f]);
+        continue;
+      }
+      const char *typeName = fs.fileType == 0x00 ? "Standard Data"
+                            : fs.fileType == 0x01 ? "Backup Data"
+                            : fs.fileType == 0x02 ? "Value"
+                            : fs.fileType == 0x03 ? "Linear Record"
+                            : fs.fileType == 0x04 ? "Cyclic Record"
+                                                   : "Unbekannt";
+      const char *commName = fs.commMode == 0x00 ? "Plain" : fs.commMode == 0x01 ? "MACed" : "Enciphered";
+      if (haveLog) {
+        log.printf("   Datei %u: Typ=%s, Kommunikation=%s", fileIds[f], typeName, commName);
+        if (fs.fileType == 0x00 || fs.fileType == 0x01) log.printf(", Groesse=%u Byte", (unsigned)fs.fileSize);
+        log.println();
+      }
+
+      if (fs.commMode == 0x03) {
+        if (haveLog) log.println("     -> Enciphered, wird nicht gelesen (Entschluesselung nicht implementiert).");
+        continue;
+      }
+
+      uint8_t dataBuf[128];
+      uint16_t dataLen = 0;
+      if (fs.fileType == 0x00 || fs.fileType == 0x01) {
+        dataLen = desfireReadData(fileIds[f], dataBuf, sizeof(dataBuf));
+      } else if (fs.fileType == 0x03 || fs.fileType == 0x04) {
+        dataLen = desfireReadRecords(fileIds[f], dataBuf, sizeof(dataBuf));
+      }
+      if (dataLen > 0 && haveLog) {
+        log.print("     Inhalt: ");
+        for (uint16_t i = 0; i < dataLen; i++) log.printf("%02X ", dataBuf[i]);
+        log.println();
+        if (fs.commMode == 0x01) log.println("     (MACed -- MAC/CMAC wurde NICHT geprueft, nur Rohdaten gezeigt)");
+      }
+    }
+  }
+
+  if (haveLog) log.close();
+  snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "DESFire: %u App(s), %u authentifiziert, %s",
+           appCount, authedApps, sdMounted ? "siehe SD-Log" : "SD nicht gemountet");
 }
 
 // Core-Versions-abhaengig (siehe README.md Abschnitt 15, Punkt 7).
@@ -619,8 +756,18 @@ void loop() {
           strcat(uidHex, byteStr);
         }
         snprintf(uidMsg, sizeof(uidMsg), "Karte erkannt, UID: %s", uidHex);
-        updateUidInfo();
         buzzerBeep(80);
+
+        // readPassiveTargetID() setzt NICHT die interne _inListedTag-
+        // Variable, die inDataExchange() (fuer die DESFire-Kommandos in
+        // desfireDeepRead()) braucht -- dafuer muss die Karte zusaetzlich
+        // per inListPassiveTarget() aktiviert werden (siehe README.md).
+        if (nfc.inListPassiveTarget()) {
+          desfireDeepRead();
+        } else {
+          snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "DESFire: inListPassiveTarget() fehlgeschlagen");
+        }
+        updateUidInfo();
         lastUidReadMs = now;
       }
     }
@@ -667,7 +814,7 @@ void loop() {
       drawButton(btnBrightDn, TFT_GREEN);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
-    } else if (y < 340) {
+    } else if (y < 352) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticParts();
