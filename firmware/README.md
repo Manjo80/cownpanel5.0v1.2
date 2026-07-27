@@ -265,16 +265,24 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   zeigt an, ob `WiFi.begin()` überhaupt eine IP bekommen hat, auch wenn der
   anschließende NTP-Request selbst fehlschlägt.
 - **Buttons reagieren erst nach 1-2 Sekunden gedrückt halten:** Der
-  PN532-Poll rief `nfc.inListPassiveTarget()` ohne explizites Timeout auf
-  (Standardvorgabe der Adafruit-Bibliothek: 1000 ms). Ohne Karte auf dem
-  Leser blockierte das bei **jedem** 300-ms-Poll-Zyklus bis zu eine volle
-  Sekunde, bevor die Funktion `false` zurückgab — und die Touch-Abfrage
-  weiter unten in `loop()` kommt danach erst wieder dran. Damit wurde die
-  Touch-Abfrage effektiv nur noch alle 1–1,3 Sekunden ausgeführt, ein
-  Loslassen des Fingers vor dem nächsten `loop()`-Durchlauf wurde schlicht
-  verpasst. Fix: `nfc.inListPassiveTarget(PN532_MIFARE_ISO14443A, 100)` mit
-  explizit 100 ms Timeout (reicht einer echten, aufliegenden Karte
-  weiterhin, siehe der ähnliche `readPassiveTargetID()`-Fix weiter oben).
+  PN532-Poll ruft bei jedem 300-ms-Zyklus `nfc.inListPassiveTarget()` auf.
+  Ohne Karte auf dem Leser sucht dabei **der PN532-Chip selbst** (nicht
+  die Bibliothek) intern nach einer Karte, bevor er ueberhaupt antwortet —
+  gesteuert vom `RFConfiguration`-Register `MxRtyPassiveActivation`, das
+  werksseitig auf `0xFF` (= endlos wiederholen) steht. Das hielt `loop()`
+  bei jedem Poll-Zyklus fest, sodass die Touch-Abfrage weiter unten nur
+  noch alle 1–1,3 Sekunden drankam — ein Loslassen des Fingers vor dem
+  nächsten `loop()`-Durchlauf wurde schlicht verpasst.
+  Ein erster Versuch, das über `nfc.inListPassiveTarget(PN532_MIFARE_ISO14443A, 100)`
+  (Timeout-Argument) zu fixen, ist am Build gescheitert — die hier
+  gepinnte Bibliotheksversion (`adafruit/Adafruit PN532@^1.3.3`) bietet
+  `inListPassiveTarget()` nur parameterlos an, keine Timeout-Überladung.
+  **Tatsächlicher Fix:** `nfc.setPassiveActivationRetries(1)` einmalig in
+  `pn532Begin()` (nach `SAMConfig()`) — begrenzt die internen
+  Wiederholversuche des Chips selbst auf 1, sodass er ohne Karte sofort
+  "nichts gefunden" zurückmeldet, statt endlos zu suchen. Der nächste
+  300-ms-Poll-Zyklus versucht es einfach erneut, eine gerade erst
+  aufgelegte Karte wird dadurch nicht verpasst.
 - **Touch-Debug-Ausgabe / `syncFromNtp()`s "."-Fortschrittsausgabe
   verlangsamen den Sketch spürbar:** ESP32-S3-USB-CDC-`Serial` blockiert,
   sobald der interne Sendepuffer vollläuft und niemand ihn ausliest (kein

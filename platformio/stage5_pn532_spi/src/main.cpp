@@ -493,6 +493,16 @@ bool pn532Begin() {
   pn532StatusColor = TFT_GREENYELLOW;
   Serial.printf("pn532Begin(): %s\n", pn532StatusMsg);
   nfc.SAMConfig();
+  // Ohne das wuerde der PN532-CHIP SELBST (nicht die Bibliothek) bei
+  // inListPassiveTarget() intern unbegrenzt oft nach einer Karte suchen,
+  // solange keine da ist (RFConfiguration-Default fuer
+  // MxRtyPassiveActivation = 0xFF = "endlos"), bevor er ueberhaupt eine
+  // Antwort an den Host zurueckschickt -- das haelt loop() so lange auf,
+  // wie die Karte fehlt (siehe loop()-Kommentar bei inListPassiveTarget()).
+  // 1 = nur ein einziger Versuch, dann sofort "nichts gefunden"
+  // zurueckmelden; der naechste 300ms-Poll-Zyklus versucht es einfach
+  // erneut, eine gerade erst aufgelegte Karte wird dadurch nicht verpasst.
+  nfc.setPassiveActivationRetries(1);
   return true;
 }
 
@@ -853,19 +863,18 @@ void loop() {
   // ("DESFire: inListPassiveTarget() fehlgeschlagen" trotz zuvor
   // erfolgreich gelesener UID -- siehe Kopfkommentar der Datei).
   //
-  // WICHTIG: explizit 100ms Timeout statt der Standardvorgabe (1000ms)!
-  // Ohne Karte auf dem Leser blockiert inListPassiveTarget() sonst bis zu
-  // eine volle Sekunde, JEDES Mal wenn dieser 300ms-Poll auslöst -- das
-  // hielt loop() so lange auf, dass die Touch-Abfrage weiter unten nur
-  // noch alle 1-1.3s drankam. Genau das fuehlte sich wie "Button reagiert
-  // erst nach 1-2 Sekunden gedrueckt halten" an (Touch-Loslassen vor dem
-  // naechsten loop()-Durchlauf wurde schlicht verpasst). 100ms reicht einer
-  // echten, aufliegenden Karte weiterhin (siehe readPassiveTargetID()-Fix
-  // mit demselben Wert weiter oben in der Projekt-Historie).
+  // WICHTIG: Diese Bibliotheksversion (adafruit/Adafruit PN532@^1.3.3)
+  // bietet inListPassiveTarget() NUR parameterlos an -- keine Ueberladung
+  // mit Timeout-Argument (ein frueherer Versuch, hier explizit ein 100ms-
+  // Timeout zu uebergeben, ist am echten Build mit "no matching function"
+  // gescheitert). Das eigentliche Problem liegt ohnehin nicht am Software-
+  // Timeout dieses Aufrufs, sondern daran, wie oft der PN532-CHIP SELBST
+  // intern nach einer Karte sucht, bevor er ueberhaupt antwortet -- siehe
+  // nfc.setPassiveActivationRetries(1) in pn532Begin().
   if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
     lastPn532AttemptMs = now;
     if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
-      if (nfc.inListPassiveTarget(PN532_MIFARE_ISO14443A, 100)) {
+      if (nfc.inListPassiveTarget()) {
         buzzerBeep(80);
         desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
         updateUidInfo();
