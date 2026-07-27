@@ -10,7 +10,7 @@ Reihenfolge, in der sie üblicherweise ans Laufen gebracht werden:
 | `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | fertig, an echter Hardware verifiziert (2 Boards, inkl. Fix für Task-Race beim ESP-NOW-Empfang, siehe Abschnitt 7) |
 | `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt erhalten) | fertig, an echter Hardware verifiziert (als Teil von Stage 4 mitbestätigt) |
 | `04_sd_card/` | SD-/TF-Karte: Live-Erkennung (Einstecken/Herausziehen) + fortlaufendes ESP-NOW-Log — Erweiterung von Stage 3 (RTC, WLAN/ESP-NOW bleiben erhalten) | fertig, an echter Hardware verifiziert (SD-Erkennung + Logging funktionieren) |
-| `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) — Erweiterung von Stage 4 (SD, RTC, WLAN/ESP-NOW bleiben erhalten), Bildschirm auf Nutzerwunsch kompakter statt Funktionen wegzulassen | auf esp_lcd_panel_rgb umgebaut, wird getestet |
+| `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Firmware-Version, UID-Read, DESFire-Tiefenauslesung mit Default-Schlüssel — siehe Abschnitt 8) — Erweiterung von Stage 4 (SD, RTC, WLAN/ESP-NOW bleiben erhalten), Bildschirm auf Nutzerwunsch kompakter statt Funktionen wegzulassen | auf esp_lcd_panel_rgb umgebaut, DESFire-Teil ungetestet (kein Testgerät), wird getestet |
 
 ### Wichtige Architekturänderung (esp_lcd_panel_rgb statt LovyanGFX Bus_RGB)
 
@@ -250,9 +250,51 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   Für die genaue Fehlerursache (Verbindung vs. Server nicht erreichbar)
   weiterhin den Serial Monitor mitlaufen lassen.
 
-## 8. Ausblick — nicht Teil dieser fünf Stages
+## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
+
+Auf Nutzerwunsch geht Stage 5 über reines UID-Lesen hinaus und versucht bei
+jeder erkannten Karte einen vollständigen DESFire-Lesevorgang mit dem
+**Werks-Default-Schlüssel** (16 Nullbytes):
+
+1. `GetVersion` (Hardware-/Software-Version, UID, Batch-Nummer, Produktionswoche/-jahr)
+2. `GetApplicationIDs` (Liste aller Anwendungen/AIDs auf der Karte)
+3. Pro Anwendung: `SelectApplication`, dann Authentifizierung mit
+   Default-Schlüssel — erst Legacy-2K3DES (Kommando `0x0A`), bei
+   Fehlschlag AES-128 (Kommando `0xAA`)
+4. Bei erfolgreicher Authentifizierung: `GetFileIDs`, pro Datei
+   `GetFileSettings` (Typ, Kommunikationsmodus, Größe) und — wo möglich —
+   `ReadData`/`ReadRecords`
+
+Alle Details landen mit RTC-Zeitstempel in `/desfire_log.txt` auf der
+SD-Karte (`desfireDeepRead()` in `05_pn532_spi.ino`/`desfire.h`); auf dem
+Display steht nur eine kurze Ein-Zeilen-Zusammenfassung (z. B. `DESFire: 2
+App(s), 1 authentifiziert, siehe SD-Log`).
+
+**Bewusst begrenzter Umfang** (siehe Kopfkommentar in `desfire.h`):
+
+- Unterstützt nur Legacy-2K3DES- und AES-128-Authentifizierung mit einem
+  16-Byte-Schlüssel — **kein** 3K3DES, **kein** EV2-Secure-Messaging.
+- Dateien im **Enciphered**-Kommunikationsmodus werden erkannt, aber
+  **nicht entschlüsselt** (im Log als "Enciphered, wird nicht gelesen"
+  markiert).
+- Dateien im **MACed**-Modus werden gelesen, der angehängte MAC/CMAC wird
+  **nicht geprüft** — die Rohdaten selbst sind bei MACed unverschlüsselt
+  übertragen, nur zusätzlich signiert.
+- Der aus RndA/RndB abgeleitete Sitzungsschlüssel wird berechnet, aber
+  nicht weiterverwendet (keine Secure-Messaging-Kommandos danach nötig).
+- **Dieser Code wurde an keiner echten DESFire-Karte getestet** (kein
+  Testgerät verfügbar) — er basiert auf der öffentlich dokumentierten
+  NXP-Spezifikation (ISO/IEC 9798-2 3-Pass-Mutual-Authentication). Schlägt
+  die Authentifizierung fehl, ist die wahrscheinlichste Erklärung, dass
+  die Karte (wie bei den meisten Karten aus dem echten Einsatz) nicht mehr
+  die Werksschlüssel hat — das ist dann korrektes Verhalten, kein Bug.
+  Serial-Ausgaben an jedem Protokollschritt helfen, einen echten Bug von
+  "Karte hat andere Schlüssel" zu unterscheiden.
+
+## 9. Ausblick — nicht Teil dieser fünf Stages
 
 - Kombiniertes Gesamtprojekt, das alle Subsysteme gleichzeitig nutzt.
-- DESFire-AES-Authentifizierung und Applikations-Lebenszyklus über PN532
-  (AuthenticateAES, CreateApplication, Credit/Debit, ChangeKey, CMAC-Schutz
-  nach der Auth) — deutlich größerer Umfang als der Basis-SPI-Test hier.
+- DESFire-Applikations-Lebenszyklus über PN532 (CreateApplication,
+  Credit/Debit, ChangeKey, CMAC-Schutz/Enciphered-Kommunikation nach der
+  Auth, EV2-Secure-Messaging, 3K3DES) — deutlich größerer Umfang als die
+  Lese-Funktionalität in Abschnitt 8.
