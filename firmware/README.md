@@ -183,6 +183,25 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   Core-Versions-abhängig. Dieser Code ist auf Core 3.x geschrieben
   (`esp_now_recv_info_t*`); auf Core 2.x muss der Recv-Callback stattdessen
   `void(const uint8_t *mac_addr, const uint8_t *data, int len)` lauten.
+- **Display "verwaschen"/doppelte Bildfehler, aber NUR sobald tatsächlich
+  ESP-NOW-Nachrichten empfangen werden (zweites Board eingeschaltet):**
+  `onDataRecv()` lief bis dahin im WiFi/ESP-NOW-System-Task von
+  Arduino-ESP32, einem ANDEREN FreeRTOS-Task als `loop()`, und zeichnete von
+  dort direkt auf `canvas` bzw. sprach direkt den I2C-Bus an (`buzzerBeep()`)
+  — ein klassischer Daten-Race, wenn das genau mit einem Touch-/Sende-Redraw
+  in `loop()` zusammenfiel. Fix: `onDataRecv()` kopiert nur noch die Daten
+  und setzt ein `volatile bool recvPending`-Flag; Zeichnen und Buzzer
+  passieren ausschließlich in `loop()`, im selben Task wie alle anderen
+  `canvas`-Zugriffe.
+- **Empfangene Nachricht zeigt `"Hallo von 00:00:00:00:00:00"` statt der
+  echten Absender-MAC im Text:** `WiFi.macAddress()` kann direkt nach
+  `WiFi.mode(WIFI_STA)` bei echtem Stromlos-Start noch die Nullen-Adresse
+  liefern (WLAN-Treiber intern noch nicht ganz bereit) — das betrifft dann
+  den SENDER, dessen `outgoing.text` beim eigenen Boot mit der Nullen-MAC
+  gefüllt wurde (die separat übertragene Absender-MAC von ESP-NOW selbst,
+  `info->src_addr`, ist davon nicht betroffen und bleibt korrekt). `setup()`
+  wartet deshalb nach `WiFi.mode(WIFI_STA)` bis zu 2s auf eine echte
+  MAC-Adresse, bevor `outgoing.text` gefüllt wird.
 - **PN532 antwortet nicht / GetFirmwareVersion schlägt fehl:** DIP-Schalter
   auf dem Modul falsch (muss SPI = Sw1 OFF/Sw2 ON sein), oder
   `PN532_PACKBUFFSIZ`-Patch fehlt.
