@@ -171,6 +171,14 @@ const char *DESFIRE_LOG_PATH = "/desfire_log.txt";
 uint32_t lastPn532AttemptMs = 0;
 uint32_t lastUidReadMs = 0;
 
+// WLAN-IP -- WiFi.begin() passiert in dieser Stage ausschliesslich
+// innerhalb von syncFromNtp() (ESP-NOW braucht dafuer keine AP-
+// Verbindung), daher gibt es sonst keinen dauerhaften Verbindungsstatus.
+// Dient als Diagnose fuer NTP-SYNC: zeigt, ob ueberhaupt eine IP bezogen
+// wurde, auch wenn der anschliessende NTP-Request selbst fehlschlaegt.
+char wifiIpMsg[48] = "WLAN: nicht verbunden";
+uint16_t wifiIpColor = TFT_LIGHTGREY;
+
 // Bereichsgrenzen der einzelnen Update-Funktionen -- an einer Stelle
 // definiert, damit das fillRect() in der jeweiligen Funktion garantiert
 // mit sich selbst konsistent bleibt. Fuer 480px Breite (siehe
@@ -182,6 +190,10 @@ const int SEND_INFO_Y = 154, SEND_INFO_H = 34;
 const int RECV_INFO_Y = 192, RECV_INFO_H = 34;
 // UID_INFO jetzt zweizeilig: UID selbst + DESFire-Zusammenfassung darunter.
 const int UID_INFO_Y = 230, UID_INFO_H = 40;
+// Liegt in der vorher freien Luecke zwischen UID_INFO (endet bei 270) und
+// den Buttons (beginnen bei 336) -- kein anderer Bereich musste verschoben
+// werden.
+const int WIFI_INFO_Y = 276, WIFI_INFO_H = 20;
 
 void drawButton(const Button &b, uint16_t fill) {
   canvas.fillRoundRect(b.x, b.y, b.w, b.h, 8, fill);
@@ -340,6 +352,27 @@ void updateUidInfo() {
   canvas.setTextColor(TFT_LIGHTGREY);
   canvas.setCursor(12, UID_INFO_Y + 20);
   canvas.print(desfireSummaryMsg);
+}
+
+// Nur die WLAN-IP-Zeile -- wird initial in setup() und nach jedem
+// NTP-SYNC-Versuch (siehe loop()) neu geschrieben. Zeigt auch dann eine
+// IP an, wenn WiFi.begin() erfolgreich war, der anschliessende NTP-Request
+// selbst aber fehlschlaegt -- hilft zu unterscheiden, ob ueberhaupt eine
+// WLAN-Verbindung zustande kam oder schon das WLAN selbst das Problem ist.
+void updateWifiInfo() {
+  if (WiFi.status() == WL_CONNECTED) {
+    snprintf(wifiIpMsg, sizeof(wifiIpMsg), "WLAN-IP: %s", WiFi.localIP().toString().c_str());
+    wifiIpColor = TFT_GREENYELLOW;
+  } else {
+    snprintf(wifiIpMsg, sizeof(wifiIpMsg), "WLAN: nicht verbunden");
+    wifiIpColor = TFT_LIGHTGREY;
+  }
+  canvas.fillRect(0, WIFI_INFO_Y, canvas.width(), WIFI_INFO_H, bgColors[bgIndex]);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextSize(1.5);
+  canvas.setTextColor(wifiIpColor);
+  canvas.setCursor(12, WIFI_INFO_Y + 2);
+  canvas.print(wifiIpMsg);
 }
 
 // Aktuelle RTC-Zeit als "YYYY-MM-DD hh:mm:ss" -- fuer Log-Zeitstempel.
@@ -777,6 +810,7 @@ void setup() {
   updateSendInfo();
   updateReceivedInfo();
   updateUidInfo();
+  updateWifiInfo();
   Serial.println("Setup fertig.");
 }
 
@@ -818,10 +852,20 @@ void loop() {
   // aktivierte Karte und schlug an echter Hardware regelmaessig fehl
   // ("DESFire: inListPassiveTarget() fehlgeschlagen" trotz zuvor
   // erfolgreich gelesener UID -- siehe Kopfkommentar der Datei).
+  //
+  // WICHTIG: explizit 100ms Timeout statt der Standardvorgabe (1000ms)!
+  // Ohne Karte auf dem Leser blockiert inListPassiveTarget() sonst bis zu
+  // eine volle Sekunde, JEDES Mal wenn dieser 300ms-Poll auslöst -- das
+  // hielt loop() so lange auf, dass die Touch-Abfrage weiter unten nur
+  // noch alle 1-1.3s drankam. Genau das fuehlte sich wie "Button reagiert
+  // erst nach 1-2 Sekunden gedrueckt halten" an (Touch-Loslassen vor dem
+  // naechsten loop()-Durchlauf wurde schlicht verpasst). 100ms reicht einer
+  // echten, aufliegenden Karte weiterhin (siehe readPassiveTargetID()-Fix
+  // mit demselben Wert weiter oben in der Projekt-Historie).
   if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
     lastPn532AttemptMs = now;
     if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
-      if (nfc.inListPassiveTarget()) {
+      if (nfc.inListPassiveTarget(PN532_MIFARE_ISO14443A, 100)) {
         buzzerBeep(80);
         desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
         updateUidInfo();
@@ -857,6 +901,9 @@ void loop() {
 #ifdef USE_WIFI_NTP_SYNC
       ntpOk = syncFromNtp();
       updateRtcInfo();
+      // Auch bei fehlgeschlagenem NTP-Request aktualisieren: zeigt, ob
+      // WiFi.begin() ueberhaupt eine IP bekommen hat (siehe updateWifiInfo()).
+      updateWifiInfo();
 #else
       Serial.println("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
 #endif
@@ -894,6 +941,7 @@ void loop() {
       updateSendInfo();
       updateReceivedInfo();
       updateUidInfo();
+      updateWifiInfo();
     }
 
     delay(150); // einfaches Debounce
