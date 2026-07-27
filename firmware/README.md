@@ -207,11 +207,22 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
 - **SD-Karte während des Betriebs eingesteckt/entfernt wird nicht erkannt:**
   `SD.cardType()` liefert nach dem ersten `SD.begin()` nur den
   zwischengespeicherten Wert zurück, keine Live-Abfrage der Hardware.
-  `checkSdCard()` (Stage 4) macht deshalb alle 2s einen kompletten Remount
-  (`SD.end()` + `sdSpi.end()` + `sdSpi.begin()` + `SD.begin()`) und
-  vergleicht das Ergebnis mit dem zuletzt bekannten Zustand — nur bei einem
-  tatsächlichen Wechsel (eingesteckt ↔ nicht lesbar) wird neu gezeichnet
-  bzw. `/espnow_log.txt` eine neue Startmarke hinzugefügt.
+  `checkSdCard()` (Stage 4) versucht deshalb alle 2s neu zu mounten, solange
+  noch keine Karte gefunden wurde — vergleicht das Ergebnis mit dem zuletzt
+  bekannten Zustand und zeichnet nur bei einem tatsächlichen Wechsel neu
+  bzw. hängt eine Startmarke an `/espnow_log.txt` an.
+- **SD-Statuszeile bleibt dauerhaft leer, obwohl die Karte laut Beep/Log
+  offenbar erkannt wird:** Frühere Version von `checkSdCard()` machte bei
+  JEDEM Poll-Zyklus (auch wenn die Karte bereits erfolgreich gemountet war)
+  einen kompletten Remount (`SD.end()` + `sdSpi.end()` + `sdSpi.begin()` +
+  `SD.begin()`) — `SD.begin()` kann bei manchen Karten spürbar lange
+  blockieren, was den kompletten `loop()`-Task für diese Zeit anhielt.
+  Jetzt wird nur noch beim allerersten Erkennen ein echter Mount-Versuch
+  gemacht; solange die Karte als gemountet gilt, reicht ein günstiger
+  Lebendigkeits-Check (Log-Datei kurz öffnen/schließen, ohne zu schreiben).
+  Zusätzlich gibt `checkSdCard()` jetzt bei jedem Mount-Versuch eine
+  Serial-Zeile aus (`SD.begin() -> true/false`) — beim Debuggen unbedingt
+  den Serial Monitor (115200 Baud) mitlaufen lassen.
 - **PN532 antwortet nicht / GetFirmwareVersion schlägt fehl:** DIP-Schalter
   auf dem Modul falsch (muss SPI = Sw1 OFF/Sw2 ON sein), oder
   `PN532_PACKBUFFSIZ`-Patch fehlt.

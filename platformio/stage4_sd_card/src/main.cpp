@@ -227,11 +227,15 @@ void formatTimestamp(char *buf, size_t bufLen) {
 // haengt eine Startmarke an die Log-Datei an (legt sie bei Bedarf an).
 void logSessionStart() {
   File f = SD.open(LOG_FILE_PATH, FILE_APPEND);
-  if (!f) return;
+  if (!f) {
+    Serial.println("logSessionStart(): SD.open() fehlgeschlagen");
+    return;
+  }
   char ts[32];
   formatTimestamp(ts, sizeof(ts));
   f.printf("--- Log gestartet %s ---\n", ts);
   f.close();
+  Serial.println("logSessionStart(): Startmarke geschrieben.");
 }
 
 // Haengt die zuletzt empfangene ESP-NOW-Nachricht mit RTC-Zeitstempel an
@@ -252,38 +256,64 @@ void logReceivedMessage() {
   f.close();
 }
 
-// Voller Remount alle SD_POLL_INTERVAL_MS -- einzige zuverlaessige Methode,
-// um Einstecken/Herausziehen der Karte waehrend des Betriebs zu erkennen
-// (SD.cardType() liefert nach dem ersten Mount nur den zwischengespeicherten
-// Wert zurueck, keine Live-Abfrage der Hardware). Zeichnet nur bei einem
+// Erkennt Einstecken/Herausziehen waehrend des Betriebs, OHNE bei jedem
+// Poll-Zyklus einen teuren Vollremount zu machen (fruehere Version machte
+// das alle 2s unbedingt -- SD.begin() kann bei manchen Karten spuerbar
+// lange blockieren, was den kompletten loop()-Task fuer diese Zeit anhielt
+// und im schlimmsten Fall dazu fuehrte, dass die Statuszeile nie zum
+// Zeichnen kam).
+//
+// Solange die Karte als gemountet gilt, reicht ein GUENSTIGER Lebendig-
+// keits-Check (Log-Datei kurz oeffnen+schliessen, ohne zu schreiben) --
+// erst wenn DER fehlschlaegt, wird sauber zurueckgesetzt und beim naechsten
+// Durchlauf ein neuer Mount-Versuch gestartet. Zeichnet nur bei einem
 // tatsaechlichen Zustandswechsel neu (gleiches Minimal-Redraw-Prinzip wie
 // bei den ESP-NOW-Updates).
 void checkSdCard() {
-  SD.end();
-  sdSpi.end();
+  if (sdMounted) {
+    File probe = SD.open(LOG_FILE_PATH, FILE_APPEND);
+    if (probe) {
+      probe.close();
+      return; // weiterhin da, nichts zu tun
+    }
+    Serial.println("checkSdCard(): Log-Datei nicht mehr erreichbar -- Karte vermutlich entfernt.");
+    SD.end();
+    sdSpi.end();
+    sdMounted = false;
+    snprintf(sdStatusMsg, sizeof(sdStatusMsg), "SD-Karte: entfernt");
+    sdStatusColor = TFT_RED;
+    updateSdInfo();
+    return;
+  }
+
   sdSpi.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
   bool ok = SD.begin(PIN_SD_CS, sdSpi, 80000000);
+  Serial.printf("checkSdCard(): SD.begin() -> %s\n", ok ? "true" : "false");
 
-  if (ok == sdMounted && sdCheckedOnce) return;
+  if (!ok) {
+    if (!sdCheckedOnce) {
+      snprintf(sdStatusMsg, sizeof(sdStatusMsg), "SD-Karte: nicht eingesteckt/nicht lesbar");
+      sdStatusColor = TFT_LIGHTGREY;
+      updateSdInfo();
+      sdCheckedOnce = true;
+    }
+    return;
+  }
 
-  sdMounted = ok;
+  sdMounted = true;
   sdCheckedOnce = true;
 
-  if (ok) {
-    uint8_t cardType = SD.cardType();
-    const char *typeStr = "unbekannt";
-    if (cardType == CARD_MMC) typeStr = "MMC";
-    else if (cardType == CARD_SD) typeStr = "SDSC";
-    else if (cardType == CARD_SDHC) typeStr = "SDHC";
-    snprintf(sdStatusMsg, sizeof(sdStatusMsg), "SD-Karte: erkannt (%s, %llu MB)",
-             typeStr, SD.cardSize() / (1024ULL * 1024ULL));
-    sdStatusColor = TFT_GREENYELLOW;
-    logSessionStart();
-    buzzerBeep(80);
-  } else {
-    snprintf(sdStatusMsg, sizeof(sdStatusMsg), "SD-Karte: nicht eingesteckt/nicht lesbar");
-    sdStatusColor = TFT_LIGHTGREY;
-  }
+  uint8_t cardType = SD.cardType();
+  const char *typeStr = "unbekannt";
+  if (cardType == CARD_MMC) typeStr = "MMC";
+  else if (cardType == CARD_SD) typeStr = "SDSC";
+  else if (cardType == CARD_SDHC) typeStr = "SDHC";
+  snprintf(sdStatusMsg, sizeof(sdStatusMsg), "SD-Karte: erkannt (%s, %llu MB)",
+           typeStr, SD.cardSize() / (1024ULL * 1024ULL));
+  sdStatusColor = TFT_GREENYELLOW;
+  Serial.printf("checkSdCard(): Zustandswechsel -> gemountet, %s\n", sdStatusMsg);
+  logSessionStart();
+  buzzerBeep(80);
   updateSdInfo();
 }
 
