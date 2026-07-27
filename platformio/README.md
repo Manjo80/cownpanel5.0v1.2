@@ -46,7 +46,8 @@ Extension baut die Python-Umgebung automatisch neu auf.
 | Ordner | Entspricht | Nutzt esp_lcd_panel_rgb? |
 |---|---|---|
 | `stage1_display_touch_buzzer/` | `firmware/01_display_touch_buzzer/` | Ja — an echter Hardware verifiziert |
-| `stage2_wifi_espnow/` | `firmware/02_wifi_espnow/` | Ja |
+| `stage2_wifi_espnow/` | `firmware/02_wifi_espnow/` | Ja — an echter Hardware verifiziert (2 Boards) |
+| `stage3_rtc/` | `firmware/03_rtc/` | Ja — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt), wird getestet |
 
 Jeder Stage-Ordner enthält:
 

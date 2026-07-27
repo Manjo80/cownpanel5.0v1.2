@@ -7,8 +7,8 @@ in der sie üblicherweise ans Laufen gebracht werden:
 | Ordner | Testet | Status |
 |---|---|---|
 | `01_display_touch_buzzer/` | RGB-Display, GT911-Touch, Backlight/Buzzer (STC8H1K28) | fertig, RGB-Ausgabe auf esp_lcd_panel_rgb umgebaut (siehe unten), an echter Hardware verifiziert (sauberes Bild, Touch nach Stromlos-Start OK) |
-| `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | auf esp_lcd_panel_rgb umgebaut, wird getestet |
-| `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync | fertig (nutzt noch LovyanGFX Bus_RGB) |
+| `02_wifi_espnow/` | WLAN-Modus + ESP-NOW Senden/Empfangen | fertig, an echter Hardware verifiziert (2 Boards, inkl. Fix für Task-Race beim ESP-NOW-Empfang, siehe Abschnitt 7) |
+| `03_rtc/` | PCF8563-Echtzeituhr, optional NTP-Sync — Erweiterung von Stage 2 (WLAN/ESP-NOW bleibt erhalten) | auf esp_lcd_panel_rgb umgebaut, wird getestet |
 | `04_sd_card/` | SD-/TF-Karte über SPI | fertig (nutzt noch LovyanGFX Bus_RGB) |
 | `05_pn532_spi/` | PN532-NFC-Modul über Software-SPI (Basis: Firmware-Version + UID-Read) | fertig (nutzt noch LovyanGFX Bus_RGB) |
 
@@ -23,17 +23,17 @@ kontinuierlichen GDMA-Bildausgabe um dieselbe PSRAM-Bandbreite konkurrieren.
 Espressifs eigener ESP-IDF-Treiber (`esp_lcd_panel_rgb`) hat dafür einen
 Bounce Buffer (kleiner SRAM-Zwischenpuffer) eingebaut.
 
-`01_display_touch_buzzer` und `02_wifi_espnow` nutzen deshalb jetzt
-`esp_lcd_panel_rgb` direkt für die Hardware-Ausgabe (`rgb_panel.h`) und
-GT911-Touch eigenständig ohne LGFX-Device (`touch_standalone.h`). LovyanGFX
-wird nur noch für die Zeichen-API genutzt: `LGFX_Sprite canvas` zeigt per
-`setBuffer()` direkt auf den von `esp_lcd_panel_rgb` bereitgestellten
-Framebuffer. Zusätzlich wartet `setup()` 600 ms zwischen `Wire.begin()` und
-der ersten Touch-Kommunikation, da der GT911 nach einem echten
-Stromlos-Start selbst noch Boot-Zeit braucht (nach Reset-Knopf fällt das
-nicht auf, da der Chip dort schon läuft). Die Stages 3-5 nutzen noch die
-alte LovyanGFX-Bus_RGB-Variante — werden erst umgestellt, sobald sich der
-Ansatz in den ersten beiden Stages bewährt hat.
+`01_display_touch_buzzer`, `02_wifi_espnow` und `03_rtc` nutzen deshalb
+jetzt `esp_lcd_panel_rgb` direkt für die Hardware-Ausgabe (`rgb_panel.h`)
+und GT911-Touch eigenständig ohne LGFX-Device (`touch_standalone.h`).
+LovyanGFX wird nur noch für die Zeichen-API genutzt: `LGFX_Sprite canvas`
+zeigt per `setBuffer()` direkt auf den von `esp_lcd_panel_rgb`
+bereitgestellten Framebuffer. Zusätzlich wartet `setup()` 600 ms zwischen
+`Wire.begin()` und der ersten Touch-Kommunikation, da der GT911 nach einem
+echten Stromlos-Start selbst noch Boot-Zeit braucht (nach Reset-Knopf fällt
+das dort nicht auf, da der Chip dort schon läuft). Die Stages 4-5 nutzen
+noch die alte LovyanGFX-Bus_RGB-Variante — werden erst umgestellt, sobald
+sie an der Reihe sind.
 
 Jeder Ordner ist ein vollständiger, eigenständiger Arduino-Sketch (Ordnername
 = `.ino`-Dateiname, wie von der Arduino-IDE verlangt) und enthält seine
@@ -43,9 +43,11 @@ kanonische Quelle für alle Pin-/Adresszuordnungen ist
 dann in jeden `0X_*`-Ordner kopieren.
 
 **Empfohlenes Vorgehen:** jede Stufe einzeln flashen und auf echter Hardware
-verifizieren, bevor die nächste angegangen wird. Jeder Sketch ist bewusst so
-gebaut, dass er für sich allein lauffähig ist — es gibt (noch) kein
-kombiniertes Gesamtprojekt, das alle fünf Subsysteme gleichzeitig nutzt.
+verifizieren, bevor die nächste angegangen wird. Ab Stage 2 baut jede Stufe
+auf der vorherigen auf (Buttons/Status bleiben sichtbar, neue Funktionen
+kommen dazu) — so ist auf einen Blick erkennbar, dass Vorheriges nicht durch
+Neues kaputtgegangen ist. Stage 1 bleibt der einzige komplett eigenständige
+Sketch.
 
 ---
 
