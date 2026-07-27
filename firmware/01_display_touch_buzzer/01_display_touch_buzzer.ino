@@ -7,15 +7,16 @@
 //
 // GROSSER UMBAU: Die RGB-Panel-Hardware-Ausgabe laeuft jetzt ueber
 // Espressifs eigenen ESP-IDF-Treiber (esp_lcd_panel_rgb, siehe
-// rgb_panel.h) statt ueber LovyanGFX's Bus_RGB/Panel_RGB -- das loeste die
+// rgb_panel.h) statt ueber LovyanGFX's Bus_RGB/Panel_RGB. Grund: nur
+// Espressifs Treiber hat einen "Bounce Buffer" gegen PSRAM-Bandbreiten-
+// Konkurrenz zwischen CPU-Schreibzugriffen und der kontinuierlichen
+// GDMA-Bildausgabe -- das war der wahrscheinliche Grund fuer die
 // hartnaeckigen Streifen/Bildfehler, die mit reinen LovyanGFX-Anpassungen
 // (Sprite-Puffer, waitDMA, PSRAM-Takt, Pixeltakt) nicht behoben werden
-// konnten. Zeichnet wird in einen eigenen PSRAM-Puffer ("canvas"), der per
-// esp_lcd_panel_rgb-Doppelpuffer (num_fbs=2) tearing-frei auf den Schirm
-// gebracht wird -- Details siehe rgb_panel.h und touch_standalone.h.
+// konnten. Details siehe rgb_panel.h und touch_standalone.h.
 //
 // Test deckt ab:
-//  - RGB-Panel-Bringup ueber esp_lcd_panel_rgb mit Doppelpuffer (tearing-frei)
+//  - RGB-Panel-Bringup ueber esp_lcd_panel_rgb mit Bounce Buffer
 //  - GT911-Touch mit deterministischer Power-On-Sequenz (touch_probe.h)
 //  - Backlight-Helligkeit und Buzzer ueber STC8H1K28 (I2C 0x30)
 //
@@ -24,7 +25,6 @@
 
 #include <Wire.h>
 #include <esp_system.h>
-#include <esp_heap_caps.h>
 #include "sdkconfig.h"
 #include "pins.h"
 #include "rgb_panel.h"
@@ -32,13 +32,11 @@
 #include "touch_probe.h"
 #include "backlight_buzzer.h"
 
-// canvas zeigt auf einen EIGENEN PSRAM-Puffer (nicht auf einen der beiden
-// Hardware-Framebuffer von rgbPanelInit()) -- die GDMA sieht ihn nie, daher
-// ist beliebig granulares Zeichnen hier tearing-frei. rgbPanelFlush() nach
-// jeder fertigen Aenderung kopiert den Inhalt tearing-frei in die Hardware
-// (siehe Erklaerung in rgb_panel.h).
+// Sprite ohne eigenen Speicher -- zeigt per setBuffer() direkt auf den
+// von rgbPanelInit() bereitgestellten PSRAM-Framebuffer. Alle Zeichen-
+// Aufrufe (fillScreen, drawString, ...) schreiben damit direkt in den
+// echten, von esp_lcd_panel_rgb verwalteten Framebuffer.
 LGFX_Sprite canvas;
-static uint16_t *g_canvasBuffer = nullptr;
 
 struct Button {
   int x, y, w, h;
@@ -132,7 +130,7 @@ void setup() {
   touchStandaloneConfig(gtAddr);
   Serial.printf("Touch-Init -> %s\n", touchStandaloneInit() ? "OK" : "FEHLGESCHLAGEN");
 
-  Serial.println("rgbPanelInit() (esp_lcd_panel_rgb, Doppelpuffer) ...");
+  Serial.println("rgbPanelInit() (esp_lcd_panel_rgb, mit Bounce Buffer) ...");
   bool panelOk = rgbPanelInit();
   Serial.printf("rgbPanelInit() -> %s\n", panelOk ? "OK" : "FEHLGESCHLAGEN");
   if (!panelOk) {
@@ -140,22 +138,14 @@ void setup() {
     while (true) { delay(1000); }
   }
 
-  // Eigener PSRAM-Puffer fuer canvas (siehe rgb_panel.h) -- NICHT einer der
-  // beiden Hardware-Framebuffer, die esp_lcd_panel_rgb intern verwaltet.
-  g_canvasBuffer = (uint16_t *)heap_caps_malloc((size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-  if (g_canvasBuffer == nullptr) {
-    Serial.println("Canvas-Speicher (PSRAM) konnte nicht allokiert werden -- Sketch haelt an.");
-    while (true) { delay(1000); }
-  }
   canvas.setColorDepth(16);
-  canvas.setBuffer(g_canvasBuffer, LCD_WIDTH, LCD_HEIGHT, 16);
+  canvas.setBuffer(g_rgbFrameBuffer, LCD_WIDTH, LCD_HEIGHT, 16);
 
   // Reihenfolge wichtig: Backlight/Buzzer-Kommandos erst NACH dem Panel-Bringup,
   // sonst ueberschreibt die Panel-Initialisierungssequenz den Zustand.
   setBacklightPercent(backlightPercent);
 
   drawStaticUI();
-  rgbPanelFlush(g_canvasBuffer);
   Serial.println("Setup fertig.");
 }
 
@@ -176,33 +166,26 @@ void loop() {
 
     if (inside(btnBeep, x, y)) {
       drawButton(btnBeep, TFT_GREEN);
-      rgbPanelFlushRect(g_canvasBuffer, btnBeep.x, btnBeep.y, btnBeep.w, btnBeep.h);
       buzzerBeep(150);
       drawButton(btnBeep, TFT_DARKGREY);
-      rgbPanelFlushRect(g_canvasBuffer, btnBeep.x, btnBeep.y, btnBeep.w, btnBeep.h);
     } else if (inside(btnBrightUp, x, y)) {
       backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
       setBacklightPercent(backlightPercent);
       Serial.printf("Backlight: %d%%\n", backlightPercent);
       drawButton(btnBrightUp, TFT_GREEN);
-      rgbPanelFlushRect(g_canvasBuffer, btnBrightUp.x, btnBrightUp.y, btnBrightUp.w, btnBrightUp.h);
       delay(80);
       drawButton(btnBrightUp, TFT_DARKGREY);
-      rgbPanelFlushRect(g_canvasBuffer, btnBrightUp.x, btnBrightUp.y, btnBrightUp.w, btnBrightUp.h);
     } else if (inside(btnBrightDn, x, y)) {
       backlightPercent = (backlightPercent >= 10) ? backlightPercent - 10 : 0;
       setBacklightPercent(backlightPercent);
       Serial.printf("Backlight: %d%%\n", backlightPercent);
       drawButton(btnBrightDn, TFT_GREEN);
-      rgbPanelFlushRect(g_canvasBuffer, btnBrightDn.x, btnBrightDn.y, btnBrightDn.w, btnBrightDn.h);
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
-      rgbPanelFlushRect(g_canvasBuffer, btnBrightDn.x, btnBrightDn.y, btnBrightDn.w, btnBrightDn.h);
     } else if (y < 380) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       drawStaticUI();
-      rgbPanelFlush(g_canvasBuffer);
     }
 
     delay(150); // einfaches Debounce
