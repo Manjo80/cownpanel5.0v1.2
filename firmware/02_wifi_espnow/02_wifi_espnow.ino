@@ -17,7 +17,8 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include "pins.h"
-#include "LGFX_Driver.h"
+#include "rgb_panel.h"
+#include "touch_standalone.h"
 #include "touch_probe.h"
 #include "backlight_buzzer.h"
 
@@ -28,7 +29,12 @@
 #include "wifi_secrets.h"  // Kopie von wifi_secrets.example.h mit echten Daten
 #endif
 
-LGFX lcd;
+// Sprite ohne eigenen Speicher -- zeigt per setBuffer() direkt auf den von
+// rgbPanelInit() bereitgestellten PSRAM-Framebuffer (esp_lcd_panel_rgb mit
+// Bounce Buffer, siehe rgb_panel.h -- LovyanGFX's eigener Bus_RGB-Treiber
+// hat keinen Bounce Buffer und zeigte hartnaeckige Bildstreifen, siehe
+// firmware/README.md).
+LGFX_Sprite canvas;
 
 typedef struct __attribute__((packed)) {
   char     text[48];
@@ -44,28 +50,28 @@ const uint32_t SEND_INTERVAL_MS = 2000;
 uint8_t broadcastAddr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 void redrawScreen() {
-  lcd.fillScreen(TFT_BLACK);
-  lcd.setTextDatum(lgfx::top_left);
-  lcd.setTextColor(TFT_WHITE);
-  lcd.setTextSize(3);
-  lcd.setCursor(20, 20);
-  lcd.println("Stage 2: WLAN + ESP-NOW");
+  canvas.fillScreen(TFT_BLACK);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextColor(TFT_WHITE);
+  canvas.setTextSize(3);
+  canvas.setCursor(20, 20);
+  canvas.println("Stage 2: WLAN + ESP-NOW");
 
-  lcd.setTextSize(2);
-  lcd.setCursor(20, 80);
-  lcd.print("Eigene MAC: ");
-  lcd.println(WiFi.macAddress());
+  canvas.setTextSize(2);
+  canvas.setCursor(20, 80);
+  canvas.print("Eigene MAC: ");
+  canvas.println(WiFi.macAddress());
 
-  lcd.setCursor(20, 120);
-  lcd.printf("Gesendet: %lu\n", (unsigned long)outgoing.counter);
+  canvas.setCursor(20, 120);
+  canvas.printf("Gesendet: %lu\n", (unsigned long)outgoing.counter);
 
-  lcd.setCursor(20, 180);
-  lcd.setTextColor(TFT_GREENYELLOW);
+  canvas.setCursor(20, 180);
+  canvas.setTextColor(TFT_GREENYELLOW);
   if (haveReceived) {
-    lcd.printf("Letzte Nachricht:\n\"%s\"\n(Zaehler %lu)",
+    canvas.printf("Letzte Nachricht:\n\"%s\"\n(Zaehler %lu)",
                lastReceived.text, (unsigned long)lastReceived.counter);
   } else {
-    lcd.println("Noch keine Nachricht empfangen.");
+    canvas.println("Noch keine Nachricht empfangen.");
   }
 }
 
@@ -97,11 +103,24 @@ void setup() {
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
   delay(50);
+
+  // Zusaetzlich zur 120ms-Adress-Auswahl-Sequenz (gt911PowerOnSequence())
+  // braucht der GT911-Chip selbst nach einem ECHTEN Stromlos-Start noch
+  // Zeit fuer sein eigenes Power-On-Booting (siehe firmware/README.md).
+  delay(600);
+
   uint8_t gtAddr = probeGT911Address();
-  lcd.setTouchAddr(gtAddr);
-  lcd.init();
-  lcd.initDMA();
-  lcd.startWrite();
+  touchStandaloneConfig(gtAddr);
+  Serial.printf("Touch-Init -> %s\n", touchStandaloneInit() ? "OK" : "FEHLGESCHLAGEN");
+
+  Serial.println("rgbPanelInit() (esp_lcd_panel_rgb, mit Bounce Buffer) ...");
+  if (!rgbPanelInit()) {
+    Serial.println("Panel-Init fehlgeschlagen -- Sketch haelt an.");
+    while (true) { delay(1000); }
+  }
+  canvas.setColorDepth(16);
+  canvas.setBuffer(g_rgbFrameBuffer, LCD_WIDTH, LCD_HEIGHT, 16);
+
   setBacklightPercent(80);
 
   WiFi.mode(WIFI_STA);
@@ -158,7 +177,7 @@ void loop() {
   }
 
   int32_t x, y;
-  if (lcd.getTouch(&x, &y)) {
+  if (touchStandaloneGetXY(&x, &y)) {
     buzzerBeep(40); // Touch bleibt in diesem Stage nur als Lebenszeichen nutzbar
     delay(150);
   }
