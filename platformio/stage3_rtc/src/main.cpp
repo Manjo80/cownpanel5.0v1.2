@@ -342,11 +342,12 @@ void setup() {
 uint32_t lastRtcDrawMs = 0;
 
 void loop() {
-  // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/gepiept -- siehe
-  // Kommentar bei recvPending oben.
+  // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet -- siehe
+  // Kommentar bei recvPending oben. Kein Buzzer-Beep beim Empfang mehr --
+  // bei zwei laufenden Boards, die sich gegenseitig alle 2s Nachrichten
+  // schicken, piept es sonst quasi durchgehend.
   if (recvPending) {
     recvPending = false;
-    buzzerBeep(60);
     updateReceivedInfo();
   }
 
