@@ -12,13 +12,8 @@
 // reicht. Zum Testen zwei Boards mit demselben Sketch flashen: jedes sendet
 // alle 2s einen Broadcast und zeigt eingehende Nachrichten des jeweils
 // anderen Boards an (+ Buzzer-Beep bei Empfang).
-//
-// WICHTIG (siehe README.md Abschnitt 15, Punkt 7): Die Callback-Signaturen
-// von esp_now_register_recv_cb/send_cb sind Core-Versions-abhaengig.
-// Dieser Code ist auf ESP32-Arduino-Core 3.x (esp_now_recv_info_t*) geschrieben.
-// Auf Core 2.x muss der recv-Callback stattdessen
-// void(const uint8_t *mac_addr, const uint8_t *data, int len) lauten.
 
+#include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
@@ -29,17 +24,13 @@
 #include "backlight_buzzer.h"
 
 // Optionale echte WLAN-Verbindung (nur fuer spaeteres NTP, siehe Stage 3).
-// Auskommentiert lassen, wenn nur ESP-NOW getestet werden soll.
 // #define USE_WIFI_STA_CONNECT
 #ifdef USE_WIFI_STA_CONNECT
 #include "wifi_secrets.h"  // Kopie von wifi_secrets.example.h mit echten Daten
 #endif
 
 // Sprite ohne eigenen Speicher -- zeigt per setBuffer() direkt auf den von
-// rgbPanelInit() bereitgestellten PSRAM-Framebuffer (esp_lcd_panel_rgb mit
-// Bounce Buffer, siehe rgb_panel.h -- LovyanGFX's eigener Bus_RGB-Treiber
-// hat keinen Bounce Buffer und zeigte hartnaeckige Bildstreifen, siehe
-// firmware/README.md).
+// rgbPanelInit() bereitgestellten PSRAM-Framebuffer.
 LGFX_Sprite canvas;
 
 struct Button {
@@ -157,7 +148,7 @@ void setup() {
 
   // Zusaetzlich zur 120ms-Adress-Auswahl-Sequenz (gt911PowerOnSequence())
   // braucht der GT911-Chip selbst nach einem ECHTEN Stromlos-Start noch
-  // Zeit fuer sein eigenes Power-On-Booting (siehe firmware/README.md).
+  // Zeit fuer sein eigenes Power-On-Booting.
   delay(600);
 
   uint8_t gtAddr = probeGT911Address();
@@ -238,7 +229,6 @@ void loop() {
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
     } else if (y < 380) {
-      // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
       redrawScreen();
     }

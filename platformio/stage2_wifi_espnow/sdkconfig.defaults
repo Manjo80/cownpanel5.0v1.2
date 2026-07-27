@@ -1,0 +1,3 @@
+# Absichtlich (fast) leer -- Stage 1 nutzt kein LVGL, daher sind Elecrows
+# LVGL-spezifische Zeilen aus dieser Datei entfernt. Die eigentlich wichtige
+# Datei ist sdkconfig.defaults.esp32s3 (PSRAM-Taktrate).
