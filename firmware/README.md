@@ -227,11 +227,28 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
 - **PN532 antwortet nicht / GetFirmwareVersion schlägt fehl:** DIP-Schalter
   auf dem Modul falsch (muss SPI = Sw1 OFF/Sw2 ON sein), oder
   `PN532_PACKBUFFSIZ`-Patch fehlt.
+- **PN532 wird erkannt, aber beim Scannen einer DESFire-Karte passiert
+  nichts:** `readPassiveTargetID()` lief ursprünglich mit nur 10 ms Timeout
+  — DESFire-Karten antworten auf die ISO14443A-Anticollision/Select-
+  Sequenz teils spürbar langsamer als einfache Mifare-Classic-Karten, und
+  Software-SPI (statt Hardware-SPI) fügt zusätzliche Kommunikationslatenz
+  hinzu. Damit lief der Lesevorgang regelmäßig in den Timeout, ohne dass
+  überhaupt etwas sichtbar passierte. Fix: Timeout auf 100 ms erhöht.
 - **DESFire-Kommandos schlagen nach erfolgreichem UID-Read fehl:**
   `readPassiveTargetID()` setzt nicht die interne `_inListedTag`-Variable —
   für `inDataExchange()`-Kommandos muss stattdessen `inListPassiveTarget()`
   zur Kartenaktivierung verwendet werden (in Stage 5 absichtlich noch nicht
   gebraucht, da dort nur die Basisverbindung getestet wird).
+- **NTP-SYNC-Button scheint nichts zu tun, obwohl WLAN-Zugangsdaten
+  korrekt eingetragen sind:** `syncFromNtp()` loggte Erfolg/Fehlschlag
+  bisher nur über Serial — auf dem Display war der Button-Flash (grün,
+  dann grau) immer gleich, egal ob die WLAN-Verbindung, die NTP-Anfrage
+  oder gar nichts fehlgeschlagen ist (oder `USE_WIFI_NTP_SYNC` schlicht
+  nicht einkommentiert war). `syncFromNtp()` gibt jetzt `true`/`false`
+  zurück, und der Button leuchtet bei einem Fehlschlag kurz **rot** auf,
+  bevor er auf grau zurückspringt — bei Erfolg direkt grau wie gewohnt.
+  Für die genaue Fehlerursache (Verbindung vs. Server nicht erreichbar)
+  weiterhin den Serial Monitor mitlaufen lassen.
 
 ## 8. Ausblick — nicht Teil dieser fünf Stages
 
