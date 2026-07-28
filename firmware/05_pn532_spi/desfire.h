@@ -181,6 +181,18 @@ inline uint8_t desfireGetFileIDs(uint8_t fileIds[], uint8_t maxFiles) {
     logMsg("desfireGetFileIDs(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return 0;
   }
+  // Diagnose (temporaer): an echter Hardware wurden hier schon mehr
+  // "Dateien" gemeldet als je angelegt wurden (9 statt der erwarteten 1,
+  // mit eindeutig unplausiblen Dateinummern wie 218 -- siehe
+  // firmware/README.md, Abschnitt "Stage 6"). len > 1 ist fuer dieses
+  // Projekt (aktuell hoechstens 1 Value-Datei pro App) bereits verdaechtig
+  // und wird geloggt, um beim naechsten Auftreten die rohen Antwortbytes
+  // zu haben statt nur die (moeglicherweise falsch interpretierten)
+  // Dateinummern.
+  if (len > 1) {
+    logMsg("desfireGetFileIDs(): len=%u (mehr als die erwartete 1 Datei -- Diagnose)", len);
+    logHex("rohe Datei-IDs", buf, len < 32 ? len : 32);
+  }
   uint8_t count = len;
   if (count > maxFiles) count = maxFiles;
   memcpy(fileIds, buf, count);
