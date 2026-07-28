@@ -309,6 +309,20 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   `05_pn532_spi.ino`/`main.cpp` hochgezählt. Steht nach dem Flashen dort
   eine ältere Nummer als erwartet, wurde entweder nicht neu gepullt oder
   das falsche Projekt/der falsche Ordner gebaut.
+- **Vormerkung fürs Lesen/Schreiben größerer Dateien (noch nicht
+  implementiert, aktuell nur `CreateValueFile`/`Credit`/`Debit`/
+  `GetValue` mit winzigen Kommandos):** Ein unabhängiges Tutorial
+  (AndroidCrypto, "ESP32 + Adafruit_PN532 + DESFire EVx", Medium,
+  Nov. 2025 — nutzt dieselben zwei Pflicht-Patches an der
+  Adafruit-Bibliothek wie wir, siehe oben) beschreibt ein zusätzliches
+  PN532-Limit: einzelne `inDataExchange()`-Aufrufe mit mehr als ~223 Byte
+  Nutzdaten liefern trotz auf 255 gepatchtem `PN532_PACKBUFFSIZ` keinen
+  Fehler, sondern scheinbar zufälligen PN532-internen Speicherinhalt
+  zurück. Lösung dort: größere Schreib-/Lesevorgänge selbst in Stücke von
+  z. B. 210 Byte aufteilen (mehrere `inDataExchange()`-Aufrufe statt
+  einem). Betrifft uns aktuell nicht (alle unsere Kommandos sind winzig),
+  aber unbedingt beachten, sobald hier mal größere Standard-Data-Files
+  gelesen/geschrieben werden sollen.
 
 ## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
 
