@@ -349,7 +349,14 @@ App(s), 1 authentifiziert, siehe SD-Log`).
   die Karte (wie bei den meisten Karten aus dem echten Einsatz) nicht mehr
   die Werksschlüssel hat — das ist dann korrektes Verhalten, kein Bug.
   Serial-Ausgaben an jedem Protokollschritt helfen, einen echten Bug von
-  "Karte hat andere Schlüssel" zu unterscheiden.
+  "Karte hat andere Schlüssel" zu unterscheiden. **Wichtig zur
+  Unterscheidung** (siehe Abschnitt 12 für die Herleitung anhand eines
+  echten Hardware-Logs): Lehnt die Karte schon in Schritt 2 mit Status
+  `0xAE` ab, ist der Schlüssel falsch. Antwortet die Karte dagegen mit
+  Status `0x00` und **nur** die eigene RndA-Rückprüfung schlägt fehl, war
+  der Schlüssel korrekt — dann liegt es an einem einzelnen
+  Übertragungsfehler (wird seit Abschnitt 12 automatisch bis zu 3x erneut
+  versucht), nicht am Schlüssel.
 
 **Build-Fehler `undefined reference to mbedtls_des3_init` (u. ä.):**
 Trat früher auf, weil `desfire.h` für die 2K3DES-Authentifizierung
@@ -516,7 +523,75 @@ Umschalter und BACKLIGHT +/- sind aus dem Hauptbildschirm in ein
 Bestätigungsschritt — diese vier Aktionen sind unkritisch und sofort
 rückgängig machbar, anders als die DESFire-Schreibkommandos.
 
-## 12. Ausblick — nicht Teil dieser fünf Stages
+## 12. Erste echte Hardware-Diagnose: Auth erreicht Status 0x00, RndA-Prüfung schlägt trotzdem fehl
+
+Erstes reales SD-Log von echter Hardware (`MASTER-PW SETZEN`) zeigte:
+`desfireAuthDes3: RndA-Rueckpruefung fehlgeschlagen`, danach beim Versuch
+mit dem Custom-Schlüssel `Schritt 2 unerwartet (status=0xAE)`. Auf den
+ersten Blick sieht das nach "falscher Schlüssel" aus (so auch die
+bisherige Logmeldung), ist es hier aber **nicht**:
+
+- Bei einem wirklich falschen Schlüssel liefert die Entschlüsselung von
+  `EncAB` auf der Karte mit **falschem** Schlüssel praktisch immer
+  Pseudozufall — die Karte lehnt dann schon in Schritt 2 mit Status `0xAE`
+  ab, **bevor** überhaupt eine `EncRndA`-Antwort verschickt wird (exakt das
+  Verhalten, das der Custom-Schlüssel-Versuch im Log zeigt).
+- Der Werks-Default-Schlüssel-Versuch (16 Nullbytes) bekam dagegen Status
+  `0x00` in Schritt 2 — die Karte hat das Kryptogramm also akzeptiert, der
+  Schlüssel war korrekt. Erst die **eigene** Entschlüsselung/Prüfung der
+  `EncRndA`-Antwort schlug fehl.
+- Die IV-Verkettung in `desfireAuthDes3()`/`desfireAuthAes()` (letzter
+  gesendeter Chiffretext-Block als IV für die finale Entschlüsselung) wurde
+  gegen die ISO/IEC-9798-2-Spezifikation und mehrere quelloffene
+  Referenzimplementierungen nachgerechnet und ist korrekt — **kein**
+  Krypto-/IV-Bug.
+
+Bleibt als Erklärung ein einzelner Übertragungsfehler auf der
+Luftschnittstelle (Bit-/Byte-Fehler in der Rückantwort der Karte) —
+plausibel angesichts der schon früher in diesem Projekt beobachteten
+PN532-Timing-/RF-Empfindlichkeiten (siehe Abschnitt 7). **Fix:** Sowohl
+`desfireAuthDes3()` als auch `desfireAuthAes()` wiederholen jetzt bis zu
+3x den **kompletten** Challenge-Response-Ablauf (neues RndA, neue
+Kommandos — der bisherige Austausch lässt sich nicht "fortsetzen"), aber
+**nur** für genau diesen Fall (Status `0x00` in Schritt 2, aber
+fehlgeschlagene eigene RndA-Prüfung). Ein echter Status-Fehler (`0xAE` o.
+ä.) in Schritt 1 oder 2 bricht weiterhin sofort ohne Retry ab — das ist
+eine echte Ablehnung durch die Karte, kein Übertragungsproblem, und ein
+erneuter Versuch würde dort nur unnötig Zeit kosten. Die Logmeldung bei
+endgültigem Fehlschlag weist jetzt außerdem explizit darauf hin, dass der
+Schlüssel laut Karten-Status korrekt war.
+
+## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
+
+`wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele
+SSID/Passwort-Paare statt nur einem festen Netzwerk — praktisch z. B. für
+Zuhause + Werkstatt + Handy-Hotspot in derselben Datei:
+
+```cpp
+static const WifiSecretEntry WIFI_SECRETS[] = {
+  { "netzwerk-1", "passwort-1" },
+  { "netzwerk-2", "passwort-2" },
+  // beliebig mehr ...
+};
+```
+
+Umgesetzt über die ESP32-Arduino-Core-Klasse `WiFiMulti`: `setup()`
+registriert alle Einträge einmal per `wifiMulti.addAP(...)`; der
+WLAN/ESP-NOW-Umschalter (EINSTELLUNGEN-Untermenü) ruft beim Einschalten
+`wifiMulti.run()` statt des bisherigen fest verdrahteten `WiFi.begin(SSID,
+PASSWORT)` auf — verbindet automatisch mit dem stärksten gerade in
+Reichweite befindlichen Netzwerk aus der Liste. Bricht die Verbindung ab
+(Netzwerk kurz außer Reichweite o. ä.), versucht ein periodisches
+Reconnect-Polling in `loop()` alle 15s erneut (`WIFI_MULTI_RETRY_INTERVAL_MS`)
+— deutlich seltener als das reine 1s-Status-Polling für die WLAN-IP-Zeile,
+weil `wifiMulti.run()` bei fehlender Verbindung selbst einen blockierenden
+`WiFi.scanNetworks()`-Aufruf durchführt und das bei jedem 1s-Tick ESP-NOW/
+Touch-Reaktionszeit spürbar stören würde. Alte `wifi_secrets.h`-Dateien im
+Ein-Netzwerk-Format (`#define WIFI_SSID`/`WIFI_PASSWORD`) funktionieren
+**nicht** mehr automatisch — Datei nach dem neuen `WifiSecretEntry`-Array-
+Format aus `wifi_secrets.example.h` aktualisieren.
+
+## 14. Ausblick — nicht Teil dieser fünf Stages
 
 - Kombiniertes Gesamtprojekt, das alle Subsysteme gleichzeitig nutzt.
 - CMAC-Schutz/Enciphered-Kommunikation nach der Authentifizierung,
