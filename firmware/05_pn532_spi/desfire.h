@@ -836,21 +836,28 @@ inline bool desfireAuthEitherKey(uint8_t keyNo, const uint8_t customKey16[16], u
 // XOR-Verknuepfung von Alt-/Neuschluessel im Kryptogramm) ist NICHT
 // implementiert, da hier nirgends gebraucht.
 //
-// Kryptogramm-Layout (aus der oeffentlich dokumentierten NXP-Spezifikation
-// bzw. quelloffenen Referenzimplementierungen wie libfreefare/Proxmark3
-// rekonstruiert):
-//   2K3DES: NewKey(16) + CRC16(NewKey)(2) -> auf 24 Byte nullgepolstert,
-//           2K3DES-CBC mit dem Sitzungsschluessel, IV = 8 Nullbytes (der
-//           Startzustand direkt nach erfolgreicher Authentifizierung,
-//           siehe ivOut-Kommentar bei desfireAuthDes3() -- NICHT der
-//           letzte Chiffretext-Block aus der Authentifizierung, wie eine
-//           frühere Version dieses Kommentars annahm).
-//   AES:    NewKey(16) + KeyVersion(1) + CRC32(0xC4,KeyNo,NewKey,KeyVersion)(4)
-//           -> auf 32 Byte nullgepolstert, AES-CBC mit dem
-//           Sitzungsschluessel, IV = 16 Nullbytes (siehe oben). WICHTIG:
-//           bei AES deckt die CRC den Kommando-Header (0xC4+KeyNo) mit
-//           ab, bei 2K3DES NICHT -- diese Asymmetrie ist Absicht (nicht
-//           mein Fehler), siehe Referenzimplementierung.
+// Kryptogramm-Layout haengt vom Sicherheitskanal ab (D40 vs. EV1, siehe
+// Proxmark3 desfirecore.c::DesfireChangeKey() -- direkt von GitHub
+// geladen und gelesen, nicht nur zusammengefasst). Da desfireAuthDes3()
+// inzwischen Kommando 0x1A (AUTHENTICATE_ISO) verwendet (siehe dortiger
+// Kommentar), laeuft die Sitzung ueber den EV1-Kanal, und ChangeKey MUSS
+// dessen Konvention nutzen, NICHT die D40-Konvention:
+//   2K3DES (EV1): NewKey(16) + CRC32(0xC4,KeyNo,NewKey)(4) -> auf 24 Byte
+//           nullgepolstert, 2K3DES-CBC mit dem Sitzungsschluessel,
+//           IV = 8 Nullbytes (Startzustand direkt nach erfolgreicher
+//           Authentifizierung, siehe ivOut-Kommentar bei
+//           desfireAuthDes3()). FRUEHER (falsch, D40-Konvention) wurde
+//           hier CRC16 NUR ueber NewKey verwendet (ohne Kommando-Header)
+//           -- das schlug an echter EV3-Hardware mit INTEGRITY_ERROR
+//           (Status 0x1E) fehl, weil die Karte inzwischen ueber den
+//           EV1-Kanal authentifiziert ist und dort CRC32 UEBER
+//           Kommandobyte+KeyNo+NewKey erwartet (Proxmark3-Kommentar:
+//           "EV1 Checksum must cover: <KeyNo> <PrevKey XOR Newkey>").
+//   AES (immer EV1-artig): NewKey(16) + KeyVersion(1) +
+//           CRC32(0xC4,KeyNo,NewKey,KeyVersion)(4) -> auf 32 Byte
+//           nullgepolstert, AES-CBC mit dem Sitzungsschluessel,
+//           IV = 16 Nullbytes. War schon vorher korrekt (deckte den
+//           Kommando-Header immer schon mit ab).
 inline bool desfireChangeKeySame(uint8_t keyNo, const uint8_t newKey16[16],
                                   const uint8_t sessionKey16[16], const uint8_t iv[16], bool isAes) {
   uint8_t plain[32] = {0};
@@ -873,11 +880,20 @@ inline bool desfireChangeKeySame(uint8_t keyNo, const uint8_t newKey16[16],
     totalLen = 32; // 21 Nutzbyte auf 32 (2 AES-Bloecke) nullgepolstert
     desfireAesCbc(sessionKey16, iv, true, plain, cipher, totalLen);
   } else {
-    uint16_t crc = desfireCrc16(newKey16, 16);
+    // CRC32 ueber Kommandobyte+KeyNo+NewKey (EV1-Konvention) -- siehe
+    // Funktionskommentar. NICHT CRC16 ueber nur NewKey (das war die
+    // fruehere, falsche D40-Annahme).
+    uint8_t header[18];
+    header[0] = 0xC4;
+    header[1] = keyNo;
+    memcpy(header + 2, newKey16, 16);
+    uint32_t crc = desfireCrc32(header, sizeof(header));
     memcpy(plain, newKey16, 16);
     plain[16] = (uint8_t)(crc & 0xFF);
     plain[17] = (uint8_t)((crc >> 8) & 0xFF);
-    totalLen = 24; // 18 Nutzbyte auf 24 (3 DES-Bloecke) nullgepolstert
+    plain[18] = (uint8_t)((crc >> 16) & 0xFF);
+    plain[19] = (uint8_t)((crc >> 24) & 0xFF);
+    totalLen = 24; // 20 Nutzbyte auf 24 (3 DES-Bloecke) nullgepolstert
     desfireDes3Cbc(sessionKey16, iv, true, plain, cipher, totalLen);
   }
 
