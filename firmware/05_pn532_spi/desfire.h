@@ -490,6 +490,53 @@ inline void desfireAesCbc(const uint8_t key16[16], const uint8_t iv[16], bool en
   mbedtls_aes_free(&ctx);
 }
 
+// SONDERFALL Legacy-2K3DES-Authentifizierung (Kommando 0x0A), NUR fuer das
+// PCD->PICC-Kryptogramm (RndA||RndB') in desfireAuthDes3(): Die NXP-Legacy-
+// Authentifizierung verwendet dafuer NICHT normale CBC-Verschluesselung,
+// sondern (dokumentierte Eigenheit, gegen die quelloffene Referenz-
+// implementierung libfreefare/mifare_desfire.c geprueft: dort wird fuer
+// AUTHENTICATE_LEGACY an dieser Stelle MCO_DECYPHER statt MCO_ENCYPHER an
+// mifare_cypher_blocks_chained() uebergeben) die STRUKTUR von CBC-
+// Verschluesselung (IV vor der Chiffre XOR-verknuepft, Chiffretext wird
+// neuer IV), aber mit der ENTSCHLUESSELUNGS-Funktion des Blockchiffre als
+// Primitiv statt der Verschluesselungsfunktion. Nur bei einem Schluessel
+// mit K1!=K2 (z. B. CUSTOM_KEY) macht das ueberhaupt einen Unterschied --
+// bei K1=K2 (Werks-Default, alle Nullbytes) sind Ver- und Entschluesselung
+// mathematisch identisch (jede DES-Rundenschluesselfolge ist dann
+// palindromisch), weshalb dieser Bug beim Werksschluessel unsichtbar
+// bleibt, aber bei CUSTOM_KEY (echter, zufaelliger 16-Byte-Schluessel)
+// sehr wohl zuschlagen wuerde. AES/ISO-Authentifizierung (desfireAuthAes())
+// braucht das NICHT -- dort verwendet libfreefare an derselben Stelle ganz
+// normal MCO_ENCYPHER.
+inline void desfireDes3CbcSendLegacy(const uint8_t key16[16], const uint8_t iv[8],
+                                      const uint8_t *in, uint8_t *out, size_t len) {
+  Des3Keys keys;
+  desfireDes3SetKey(key16, keys);
+  uint8_t ivBuf[8];
+  memcpy(ivBuf, iv, 8);
+  size_t blocks = len / 8;
+  for (size_t b = 0; b < blocks; b++) {
+    uint8_t xored[8];
+    for (int i = 0; i < 8; i++) xored[i] = in[b * 8 + i] ^ ivBuf[i];
+    des3CryptBlockEde(keys, false, xored, out + b * 8); // false = Entschluesselungs-Chiffre (Legacy-Eigenheit)
+    memcpy(ivBuf, out + b * 8, 8);
+  }
+}
+
+// Formatiert bis zu 16 Byte als Hex-String fuers Log -- reine Diagnose-
+// Hilfsfunktion, um bei einem Authentifizierungsfehlschlag die tatsaechlich
+// ausgetauschten Rohdaten sichtbar zu machen (z. B. um zu pruefen, ob eine
+// fehlgeschlagene RndA-Rueckpruefung an voellig zufaelligen oder eher
+// "fast richtigen" Bytes liegt).
+inline void logHex(const char *label, const uint8_t *data, size_t len) {
+  char hex[56] = "";
+  size_t pos = 0;
+  for (size_t i = 0; i < len && pos + 3 < sizeof(hex); i++) {
+    pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", data[i]);
+  }
+  logMsg("  %s: %s", label, hex);
+}
+
 // Legacy-2K3DES-Authentifizierung (Kommando 0x0A), ISO/IEC-9798-2-3-Pass-
 // Mutual-Authentication. key16 = 16-Byte-Schluessel (Werks-Default:
 // 16 Nullbytes). sessionKeyOut wird bei Erfolg befuellt. ivOut (falls
@@ -542,7 +589,7 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
     memcpy(plainAB + 8, rndBRot, 8);
 
     uint8_t encAB[16];
-    desfireDes3Cbc(key16, encRndB, true, plainAB, encAB, 16); // IV = encRndB (Chiffretext-Chaining)
+    desfireDes3CbcSendLegacy(key16, encRndB, plainAB, encAB, 16); // IV = encRndB (Chiffretext-Chaining); Legacy-Sonderfall siehe Funktionskommentar
 
     uint8_t send2[17];
     send2[0] = 0xAF;
@@ -573,6 +620,19 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
       if (ivOut) memcpy(ivOut, encRndAResp, 8);
       return true;
     }
+
+    // Roh-Hex-Dump fuer den Fehlerfall -- reine Diagnose (siehe logHex()-
+    // Kommentar), damit sich bei einem erneuten Fehlschlag an echter
+    // Hardware nachrechnen laesst, ob die Abweichung "voellig zufaellig"
+    // aussieht (spraeche fuer Uebertragungsfehler) oder ein erkennbares
+    // Muster hat (spraeche fuer einen Logikfehler).
+    logMsg("desfireAuthDes3: Diagnose Versuch %d:", attempt);
+    logHex("RndB (entschluesselt)", rndB, 8);
+    logHex("RndA (generiert)", rndA, 8);
+    logHex("EncAB[8:16] (=IV Schritt 4)", encAB + 8, 8);
+    logHex("EncRndAResp (von Karte)", encRndAResp, 8);
+    logHex("RndARot (berechnet)", rndARot, 8);
+    logHex("RndARot (erwartet)", rndAExpectedRot, 8);
 
     if (attempt < 3) {
       logMsg("desfireAuthDes3: RndA-Rueckpruefung fehlgeschlagen, obwohl die Karte den Schluessel in "
@@ -654,6 +714,15 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
       if (ivOut) memcpy(ivOut, encRndAResp, 16);
       return true;
     }
+
+    // Roh-Hex-Dump siehe Kommentar bei desfireAuthDes3().
+    logMsg("desfireAuthAes: Diagnose Versuch %d:", attempt);
+    logHex("RndB (entschluesselt)", rndB, 16);
+    logHex("RndA (generiert)", rndA, 16);
+    logHex("EncAB[16:32] (=IV Schritt 4)", encAB + 16, 16);
+    logHex("EncRndAResp (von Karte)", encRndAResp, 16);
+    logHex("RndARot (berechnet)", rndARot, 16);
+    logHex("RndARot (erwartet)", rndAExpectedRot, 16);
 
     if (attempt < 3) {
       logMsg("desfireAuthAes: RndA-Rueckpruefung fehlgeschlagen, obwohl die Karte den Schluessel in "
