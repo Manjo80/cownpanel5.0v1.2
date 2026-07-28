@@ -326,15 +326,19 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
 
 ## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
 
-Auf Nutzerwunsch geht Stage 5 über reines UID-Lesen hinaus und versucht bei
-jeder erkannten Karte einen vollständigen DESFire-Lesevorgang mit dem
-**Werks-Default-Schlüssel** (16 Nullbytes):
+Auf Nutzerwunsch geht Stage 5 über reines UID-Lesen hinaus und führt einen
+vollständigen DESFire-Lesevorgang mit dem **Werks-Default-Schlüssel**
+(16 Nullbytes) durch. **Ausgelöst über den KARTEN-INFO-Button** (siehe
+Abschnitt 10) — läuft NICHT mehr automatisch im Hintergrund bei jeder
+erkannten Karte (Nutzerwunsch: der PN532 soll nur nach einem bewussten
+Tastendruck aktiv scannen, nicht durchgehend):
 
 1. `GetVersion` (Hardware-/Software-Version, UID, Batch-Nummer, Produktionswoche/-jahr)
 2. `GetApplicationIDs` (Liste aller Anwendungen/AIDs auf der Karte)
 3. Pro Anwendung: `SelectApplication`, dann Authentifizierung mit
-   Default-Schlüssel — erst Legacy-2K3DES (Kommando `0x0A`), bei
-   Fehlschlag AES-128 (Kommando `0xAA`)
+   Default-Schlüssel — erst 2K3DES (Kommando `0x1A`, siehe Abschnitt 12
+   zur Begründung, warum nicht `0x0A`), bei Fehlschlag AES-128 (Kommando
+   `0xAA`)
 4. Bei erfolgreicher Authentifizierung: `GetFileIDs`, pro Datei
    `GetFileSettings` (Typ, Kommunikationsmodus, Größe) und — wo möglich —
    `ReadData`/`ReadRecords`
@@ -427,14 +431,15 @@ oder drei Buttons nebeneinander ist.
   tatsächlichen LovyanGFX-Konvention passt — bitte melden, dann wird die
   Formel korrigiert.
 
-## 10. DESFire-Schreibfunktionen (Stage 5, 7 zusätzliche Buttons)
+## 10. DESFire-Schreibfunktionen (Stage 5, 8 Aktions-Buttons)
 
 Auf Nutzerwunsch kann Stage 5 jetzt auch schreibend auf eine DESFire-Karte
 zugreifen: eigene Applikation mit Guthaben-Datei anlegen/löschen,
-Guthaben buchen/nutzen/abfragen, und den Werks-Default-Schlüssel gegen
-einen eigenen Schlüssel tauschen (und zurück). Alle 7 Buttons rechts
-unten im Hochformat-Layout (siehe Abschnitt 9), alle Parameter fest im
-Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
+Guthaben buchen/nutzen/abfragen, Karteninformationen anzeigen, und den
+Werks-Default-Schlüssel gegen einen eigenen Schlüssel tauschen (und
+zurück). Alle 8 Buttons rechts unten im Hochformat-Layout (siehe
+Abschnitt 9), alle Parameter fest im Code (`05_pn532_spi.ino`), da das
+Panel keine Tastatur hat:
 
 | Konstante | Wert | Bedeutung |
 |---|---|---|
@@ -444,22 +449,32 @@ Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
 | `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
 | `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
 
-**Aktions-Fenster statt Sofortausführung:** Jeder der 7 Buttons öffnet ein
-eigenes Fenster (`DesfireModalState`, `drawDesfireModalConfirm()`/
-`drawDesfireModalResult()`) — erst eine Bestätigung mit **ABBRECHEN**/
-**AUSFÜHREN**, nach der Ausführung das Ergebnis mit **SCHLIESSEN**-Button.
-Grund: der automatische Lese-Scan (Abschnitt 8) lief anfangs weiter im
-Hintergrund und überschrieb das Ergebnis eines gerade gedrückten Buttons
-fast sofort mit seiner eigenen generischen Zusammenfassung — sichtbar war
-dann nur noch der Piepton, ohne erkennbaren Effekt. Ein erster Fix (Auto-
-Scan für einige Sekunden nach jedem Tastendruck pausieren) kaschierte das
-nur; jetzt pausiert der komplette Hintergrund-Block (siehe `loop()`) für
-die gesamte Dauer, in der das Fenster offen ist — keine Race Condition
-mehr, das PN532-Modul bleibt dabei durchgehend aktiv, nur eben ohne
-Hintergrund-Polling währenddessen.
+**Aktions-Fenster mit aktivem Warten auf die Karte (Nutzerwunsch,
+mehrfach überarbeitet):** Jeder Aktions-Button öffnet ein eigenes Fenster
+(`DesfireModalState`). Für die kritischen/schreibenden Aktionen erst eine
+Bestätigung mit **ABBRECHEN**/**AUSFÜHREN** (`drawDesfireModalConfirm()`);
+für das rein lesende KARTEN INFO entfällt dieser Schritt. Danach wechselt
+das Fenster in einen **aktiven Wartezustand** (`MODAL_WAITING_CARD`,
+`drawDesfireModalWaiting()`): "Karte jetzt auflegen" wird angezeigt, der
+PN532 wird jetzt erst periodisch abgefragt (vorher lief das Polling
+durchgehend im Hintergrund, auch ohne dass irgendeine Aktion gewünscht
+war — auf Nutzerwunsch entfernt, das Modul soll nicht mehr staendig aktiv
+scannen). Sobald eine Karte erkannt wird, wartet der Code eine kurze
+Beruhigungspause (`DESFIRE_CARD_SETTLE_MS`, 300 ms) und führt dann
+automatisch die Aktion aus — kein zusätzlicher Tastendruck nötig. Danach
+das Ergebnis mit **SCHLIESSEN**-Button (`drawDesfireModalResult()`).
+Gepiept wird ausschließlich ganz am Ende (`desfireOpFinish()`), nie schon
+beim bloßen Erkennen der Karte.
 
 **Buttons:**
 
+- **KARTEN INFO** — rein lesend, kein Bestätigungsschritt: liest UID +
+  DESFire-Kurzinfo der aufgelegten Karte (`desfireDeepRead()`, wie zuvor
+  automatisch im Hintergrund, jetzt bewusst ausgelöst). Ergebnisfenster
+  zeigt UID-Zeile + Kurzzusammenfassung; Details weiterhin in
+  `/desfire_log.txt`. `drawDesfireModalResult()` ist bewusst so gebaut,
+  dass sich hier später leicht weitere Karteninformationen ergänzen
+  lassen (ein zusätzlicher `printWrapped()`-Aufruf pro neuer Zeile).
 - **MASTER-PW SETZEN / AUF STANDARD** — authentifiziert mit dem jeweils
   *aktuell gültigen* Schlüssel (`desfireAuthEitherKey()` probiert erst
   Default, dann Custom) und ändert Key 0 per `ChangeKey` auf den anderen
@@ -473,10 +488,13 @@ Hintergrund-Polling währenddessen.
 - **APP LOESCHEN** — `DeleteApplication(CUSTOM_AID)`, muss laut
   DESFire-Vorgabe auf PICC-Ebene authentifiziert aufgerufen werden.
 - **GUTHABEN BUCHEN / NUTZEN** — `Credit`/`Debit` + `CommitTransaction`
-  (ohne Commit werden Buchungen beim nächsten Kommando verworfen). Bei
-  "NUTZEN": die **Karte selbst** lehnt ab, wenn das Guthaben dadurch unter
-  `VALUE_LOWER_LIMIT` (0) fallen würde (Status meist `BOUNDARY_ERROR`) —
-  keine eigene Guthaben-Prüfung nötig/implementiert.
+  (ohne Commit werden Buchungen beim nächsten Kommando verworfen), danach
+  automatisch `GetValue` für den neuen Kontostand (Nutzerwunsch) —
+  Ergebnisfenster zeigt z. B. "+100 gebucht, neuer Stand: 300" statt nur
+  "gebucht". Bei "NUTZEN": die **Karte selbst** lehnt ab, wenn das
+  Guthaben dadurch unter `VALUE_LOWER_LIMIT` (0) fallen würde (Status
+  meist `BOUNDARY_ERROR`) — keine eigene Guthaben-Prüfung nötig/
+  implementiert.
 - **GUTHABEN ABFRAGEN** — `GetValue`, Ergebnis in der Zusammenfassungszeile.
 
 **Sicherheitshinweis ChangeKey (bitte lesen, bevor an einer echten Karte
@@ -863,6 +881,55 @@ Sitzungsschlüssel-Formel oder der Start-IV (beide erst in Nachtrag 4
 eingeführt und noch nie an echter Hardware bestätigt, da vorher die
 Authentifizierung selbst schon scheiterte).
 
+**Nachtrag 7 — BESTÄTIGT: kompletter Schreib-Workflow funktioniert an
+echter Hardware.** Test an echter Hardware: `MASTER-PW SETZEN` → App
+erstellen → Guthaben einbuchen (`Credit`) → Guthaben abfragen
+(`GetValue`) → Guthaben ausbuchen (`Debit`) → App löschen
+(`DeleteApplication`) → `AUF STANDARD ZURÜCKSETZEN` — **alle 7 DESFire-
+Schreibfunktionen laufen jetzt Ende-zu-Ende erfolgreich durch.** Damit
+ist die Kernfrage dieser wochenlangen Fehlersuche (Abschnitte 12,
+Nachträge 1-7) abgeschlossen: 2K3DES-Authentifizierung + alle
+Schreibkommandos funktionieren an einer echten DESFire-EV3-Karte.
+
+**Neuer, noch offener Fund dabei: `GetFileIDs` meldet mehr Dateien als
+je angelegt wurden.** Die dedizierte `/desfire_log.txt` zeigte für die
+gerade frisch erstellte App (genau 1 Value-Datei angelegt) stattdessen:
+
+```
+Anwendungen (AIDs): 1
+-- AID 123456 --
+   Authentifiziert mit Default-Schluessel (2K3DES).
+   Dateien: 9
+   Datei 0: Typ=Value, Kommunikation=Plain          <- echt, unsere Datei
+   Datei 218: GetFileSettings fehlgeschlagen.        <- kann nicht echt sein
+   Datei 113: GetFileSettings fehlgeschlagen.        <- (es gibt im Code
+   Datei 114: GetFileSettings fehlgeschlagen.           keinen Pfad, der
+   Datei 48: GetFileSettings fehlgeschlagen.             mehr als 1 Datei
+   Datei 92: GetFileSettings fehlgeschlagen.             pro App anlegt)
+   Datei 129: GetFileSettings fehlgeschlagen.
+   Datei 38: GetFileSettings fehlgeschlagen.
+   Datei 34: GetFileSettings fehlgeschlagen.
+```
+
+Datei 0 ist echt (unsere Value-Datei), die restlichen 8 Dateinummern
+sehen nach Zufallsbytes aus. Da `desfireGetFileIDs()` `len` direkt aus
+der PN532-Antwortlänge übernimmt (kein eigener Parsing-Bug gefunden --
+Code gegengeprüft), muss die zugrunde liegende `inDataExchange()`-Antwort
+selbst 10 statt der erwarteten 2 Bytes (Status + 1 Dateinummer) enthalten
+haben. Das erinnert an die vom Tutorial in Abschnitt 7 unabhängig
+beschriebene PN532-Eigenheit (interner Speicher/Puffer liefert unter
+bestimmten Bedingungen scheinbar zufälligen Inhalt statt eines
+sauberen Fehlers) -- hier allerdings bei einer winzigen Anfrage, nicht
+bei einer großen Übertragung wie dort, und aufgetreten nach einer
+Serie vieler schneller Authentifizierungen/Kommandos hintereinander
+(möglicherweise state-bezogen: PN532- oder Karten-Sitzung nicht sauber
+zwischen den vielen Vorgängen zurückgesetzt). **Noch nicht behoben, nur
+diagnostiziert:** `desfireGetFileIDs()` loggt jetzt bei `len > 1`
+(für dieses Projekt aktuell immer verdächtig, da wir nie mehr als 1
+Datei pro App anlegen) einen Hex-Dump der rohen Antwortbytes -- damit
+gibt es beim nächsten Auftreten echte Rohdaten statt nur die
+interpretierten (falschen) Dateinummern. Siehe Abschnitt 15 (Stage 6).
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele
@@ -893,10 +960,134 @@ Ein-Netzwerk-Format (`#define WIFI_SSID`/`WIFI_PASSWORD`) funktionieren
 **nicht** mehr automatisch — Datei nach dem neuen `WifiSecretEntry`-Array-
 Format aus `wifi_secrets.example.h` aktualisieren.
 
-## 14. Ausblick — nicht Teil dieser fünf Stages
+## 14. Ausblick — bewusst NICHT Teil dieses Repositories
 
-- Kombiniertes Gesamtprojekt, das alle Subsysteme gleichzeitig nutzt.
+Dieses Repository hat einen klar begrenzten Zweck: **alle Board- und
+PN532/DESFire-Eigenheiten finden und lösen**, mit Testfirmware pro
+Stage — NICHT die eigentliche Terminal-Anwendung entwickeln. Folgendes
+gehört bewusst zu einem SPÄTEREN, eigenen Projekt (der echten
+Terminal-Firmware), nicht hierher:
+
+- Das kombinierte Gesamtprojekt/Terminal, das alle Subsysteme
+  gleichzeitig und produktiv nutzt.
 - CMAC-Schutz/Enciphered-Kommunikation nach der Authentifizierung,
   EV2-Secure-Messaging, 3K3DES, ChangeKey für einen anderen als den
-  authentifizierten Schlüssel — deutlich größerer Umfang als die
-  Lese-/Schreib-Funktionalität in Abschnitt 8/10.
+  authentifizierten Schlüssel.
+- Pro-Karte diversifizierte Schlüssel (Schlüsselableitung aus UID +
+  Master-Key, z. B. nach NXP AN10922) statt eines einzigen, im
+  Quellcode fest hinterlegten Schlüssels.
+- Buchungshistorie (Linear-/Cyclic-Record-Dateien) und alles, was damit
+  zusammenhängt (siehe Abschnitt 15).
+- Jegliche Geschäftslogik (Preise, Berechtigungen, Benutzerverwaltung).
+
+## 15. Stage 6 — Robustheit, Randfälle und verbleibende Board-/Modul-Eigenheiten
+
+Nach dem Kernerfolg (Abschnitt 12, Nachtrag 7: alle 7 DESFire-
+Schreibfunktionen laufen Ende-zu-Ende) ist die nächste Stage **kein
+neues Feature**, sondern das systematische Durchtesten und Absichern
+dessen, was schon da ist — passend zum eigentlichen Zweck dieses
+Repositories. Geplanter Umfang, geordnet nach Priorität:
+
+**A) Noch offene Bugs (zuerst):**
+1. ~~`GetFileIDs`-Anomalie~~ — Ursache gefunden, Gegenmaßnahme eingebaut,
+   siehe "Ergebnisse der ersten Testrunde" unten. Bitte beim nächsten
+   Auftreten trotzdem nochmal die neuen Log-Zeilen schicken, um die
+   Gegenmaßnahme selbst zu bestätigen.
+
+**B) Bisher ungetestete Codepfade:**
+2. AES-128-Authentifizierung (`desfireAuthAes()`) — nie erfolgreich
+   gegen echte Hardware getestet, da die Testkarte einen 2K3DES-
+   Schlüssel in Slot 0 hat. Testweise eine App mit `aesKeys=true`
+   anlegen (der Parameter existiert in `desfireCreateApplication()`,
+   wird aber vom UI aktuell nicht genutzt) und denselben ChangeKey-/
+   Credit-/Debit-Ablauf gegen einen AES-Schlüssel durchspielen.
+3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion) — aus demselben Grund nie
+   getestet.
+
+**C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
+4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).
+5. `GetValue` direkt nach `Credit`, aber vor `CommitTransaction` --
+   zeigt das den alten oder den neuen Wert?
+6. Karte mitten in einem mehrstufigen Vorgang (Auth, ChangeKey,
+   CreateApplication, Credit vor Commit) wegziehen -- sauberer
+   Fehlschlag ohne Hänger/Absturz?
+7. Viele Zyklen hintereinander (Master-Key setzen/zurücksetzen, App
+   erstellen/löschen) -- Stabilität über Zeit, kein Speicherleck, kein
+   ESP32-Reset.
+8. ESP-NOW-Traffic von einem zweiten Board UND DESFire-Vorgänge
+   gleichzeitig -- Timing-Interferenzen?
+
+**D) Hardware-Varianz (abhängig von Beschaffung):**
+9. Andere Kartengrößen (4K/8K/16K statt der bisher getesteten 2K) --
+   siehe Antwort weiter oben im Gespräch, sollte laut Code-Analyse ohne
+   Änderung funktionieren, aber nie an echter größerer Karte bestätigt.
+10. Eine echte EV1- oder EV2-Karte, falls verfügbar -- unsere
+    Kompatibilitäts-Annahme (Abschnitt 12, Antwort zu "EV1 vs. EV2 vs.
+    EV3") ist bisher nur protokoll-logisch begründet, nicht unabhängig
+    bestätigt.
+11. Ein zweites PN532-Modul (andere Charge/anderer Anbieter) -- das im
+    Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
+    Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
+    Hardware ausschließen oder bestätigen.
+
+### Ergebnisse der ersten Testrunde
+
+**Test 6 (Karte mitten im Vorgang wegziehen) durchgeführt — zwei echte
+Funde dabei:**
+
+1. **"App wurde trotz angezeigtem Fehlschlag angelegt" -- erklärt, kein
+   Datenverlust-Bug.** Log zeigte:
+   ```
+   desfireCreateApplication(): UNBEKANNT (status=0xDE)
+   desfireOpCreateApp(): CreateApplication fehlgeschlagen (existiert sie schon?).
+   ```
+   `0xDE` ist der DESFire-Code für `DUPLICATE_ERROR` ("Anwendung
+   existiert bereits") -- unsere `desfireStatusName()` kannte den Code
+   noch nicht und zeigte "UNBEKANNT". Der tatsächliche Ablauf: beim
+   ERSTEN (abgebrochenen) Versuch hatte die Karte `CreateApplication`
+   bereits verarbeitet, BEVOR das Wegziehen die Rückmeldung zum Reader
+   verhinderte -- der Reader sah nur einen Kommunikationsfehler und
+   zeigte "fehlgeschlagen", obwohl die Karte die Aktion schon
+   ausgeführt hatte. Beim NÄCHSTEN Versuch meldet die Karte dann
+   korrekterweise `0xDE` ("gibt's schon"), was ebenfalls als
+   "fehlgeschlagen" angezeigt wurde. Das ist **kein Bug in der
+   Zuverlässigkeit** -- es ist erwartetes, physikalisch bedingtes
+   NFC-Verhalten: wird das RF-Feld genau zwischen "Karte hat das
+   Kommando verarbeitet" und "Antwort beim Reader angekommen"
+   unterbrochen, weiß der Reader nicht mehr sicher, ob die Aktion
+   durchging. **Wichtige Konsequenz fürs spätere Terminal:** nach einem
+   gemeldeten Fehlschlag NIE einfach nochmal automatisch versuchen, ohne
+   vorher den tatsächlichen Kartenzustand zu prüfen (genau das haben wir
+   hier über die Tiefenauslesung zufällig getan und dadurch bemerkt).
+   **Fix:** `0xDE` (`DUPLICATE_ERROR`), `0xCA` (`COMMAND_ABORTED`) und
+   `0xEE` (`MEMORY_ERROR`) zu `desfireStatusName()` ergänzt, damit
+   solche Fälle beim nächsten Mal klar im Log stehen statt "UNBEKANNT".
+
+2. **`GetFileIDs`-Anomalie: Ursache eingegrenzt, Gegenmaßnahme
+   eingebaut.** Drei unabhängige Vorkommen im selben Testlauf zeigten
+   IMMER exakt 8 zusätzliche, unplausible "Dateien" (z. B. 233, 186, 21,
+   219, 22, 250, 213, 239) -- zu regelmäßig für reines Zufallsrauschen,
+   und 8 Byte entspricht genau der Blockgröße unserer DES3-
+   Authentifizierungsantworten. Der tatsächliche Adafruit_PN532-
+   Quellcode (`inDataExchange()`, direkt von GitHub geladen und
+   gelesen) zeigt: die Antwortlänge wird nur übernommen, wenn die vom
+   **PN532-Chip selbst** mitgesendete Längen-Prüfsumme (LCS) passt --
+   das schließt einen Treiber-/Auswertungsbug in unserem Code oder der
+   Adafruit-Bibliothek aus. Wenn die Länge dennoch falsch ist, muss der
+   PN532-CHIP selbst eine falsche (aber intern konsistente) Länge
+   melden -- vermutlich Restdaten im chip-internen Zielantwortspeicher
+   von der unmittelbar vorangegangenen 8-Byte-Authentifizierungsantwort.
+   Das ist eine Hardware-/Chip-Eigenheit, kein Software-Bug, und lässt
+   sich nicht in der Treiber-Bibliothek reparieren.
+   **Gegenmaßnahme:** `desfireGetFileIDs()` wiederholt die Abfrage bis
+   zu 2x, sobald mehr als 1 Datei gemeldet wird, und übernimmt nur ein
+   Ergebnis, das sich in zwei aufeinanderfolgenden Abfragen exakt
+   bestätigt (ein echter Speichermüll-Fehlschlag sollte sich nicht
+   identisch wiederholen). Funktioniert unverändert auch für echte
+   Apps mit mehreren Dateien (z. B. spätere Record-Dateien), solange die
+   Wiederholung dasselbe Ergebnis liefert.
+
+Punkte A-C brauchen keine neue Hardware und keinen neuen Code (außer
+punktuellen Diagnose-Ergänzungen wie in Nachtrag 7) -- das ist der
+sinnvolle nächste Schritt. D hängt davon ab, welche Zusatz-Hardware
+verfügbar ist.

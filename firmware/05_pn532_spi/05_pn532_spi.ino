@@ -196,7 +196,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.11";
+const char *FIRMWARE_VERSION = "2026-07-28.14";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -238,14 +238,15 @@ const int BTN_LEFT_X = 16, BTN_RIGHT_X = 248;
 const int BTN_ROW1_Y = 310;
 
 Button btnSettingsOpen   = { BTN_LEFT_X,  BTN_ROW1_Y + 0 * BTN_ROW_GAP, 448,       BTN_H, "EINSTELLUNGEN" };
-Button btnSetMasterKey   = { BTN_LEFT_X,  BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "MASTER-PW SETZEN" };
-Button btnResetMasterKey = { BTN_RIGHT_X, BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "AUF STANDARD" };
-Button btnCreateApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN" };
-Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP LOESCHEN" };
-Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
-Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
-Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
-Button btnLogOpen        = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, 448,       BTN_H, "LOG ANZEIGEN" };
+Button btnCardInfo       = { BTN_LEFT_X,  BTN_ROW1_Y + 1 * BTN_ROW_GAP, 448,       BTN_H, "KARTEN INFO" };
+Button btnSetMasterKey   = { BTN_LEFT_X,  BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "MASTER-PW SETZEN" };
+Button btnResetMasterKey = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "AUF STANDARD" };
+Button btnCreateApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN" };
+Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP LOESCHEN" };
+Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
+Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
+Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
+Button btnLogOpen        = { BTN_LEFT_X,  BTN_ROW1_Y + 6 * BTN_ROW_GAP, 448,       BTN_H, "LOG ANZEIGEN" };
 
 // EINSTELLUNGEN-Untermenue -- wiederverwendet dieselbe Fenstergeometrie
 // wie das DESFire-Aktions-Fenster (MODAL_X/Y/W/H, siehe unten), aber ohne
@@ -270,16 +271,25 @@ const int32_t VALUE_LOWER_LIMIT = 0;       // Karte lehnt Debit unter 0 selbst a
 const int32_t VALUE_UPPER_LIMIT = 1000000; // willkuerliche, aber grosszuegige Obergrenze
 const int32_t CREDIT_DEBIT_AMOUNT = 100;   // fester Betrag pro Tastendruck, leicht aenderbar
 
-// DESFire-Aktions-Fenster: jeder der 7 DESFire-Buttons oeffnet jetzt ein
-// eigenes Fenster (auf Nutzerwunsch) statt die Aktion sofort auszufuehren
-// -- erst eine Bestaetigung (ABBRECHEN/AUSFUEHREN), danach das Ergebnis
-// mit SCHLIESSEN-Button. Solange dieses Fenster offen ist, pausiert der
-// automatische Lese-Scan KOMPLETT (siehe loop()) -- kein Wettlauf mehr
-// zwischen Auto-Scan und manueller Aktion um dieselbe Anzeige/denselben
-// PN532. Das PN532-Modul selbst bleibt dabei jederzeit aktiv (es wird nur
-// eben nicht mehr im Hintergrund automatisch abgefragt).
-enum DesfireModalState { MODAL_CLOSED, MODAL_CONFIRM, MODAL_RESULT };
+// DESFire-Aktions-Fenster: jeder Aktions-Button oeffnet ein eigenes
+// Fenster statt die Aktion sofort auszufuehren. Ablauf (Nutzerwunsch,
+// siehe firmware/README.md): erst eine Bestaetigung (ABBRECHEN/
+// AUSFUEHREN) fuer die schreibenden/kritischen Aktionen, dann WARTET das
+// Fenster AKTIV auf eine Karte (der PN532 wird waehrenddessen periodisch
+// abgefragt -- NUR in diesem Zustand, nicht mehr staendig im
+// Hintergrund wie frueher), fuehrt die Aktion nach einer kurzen
+// Beruhigungspause (DESFIRE_CARD_SETTLE_MS) nach dem ersten Erkennen aus
+// und zeigt danach das Ergebnis mit SCHLIESSEN-Button. Gepiept wird
+// ausschliesslich am Ende (desfireOpFinish()), nie schon beim blossen
+// Erkennen der Karte.
+enum DesfireModalState { MODAL_CLOSED, MODAL_CONFIRM, MODAL_WAITING_CARD, MODAL_RESULT };
 DesfireModalState desfireModalState = MODAL_CLOSED;
+
+// Zeitpunkt, an dem die Karte im MODAL_WAITING_CARD-Zustand zum ersten
+// Mal erkannt wurde (0 = noch nicht erkannt) -- die eigentliche Aktion
+// startet erst DESFIRE_CARD_SETTLE_MS spaeter, siehe loop().
+uint32_t desfireWaitCardDetectedMs = 0;
+const uint32_t DESFIRE_CARD_SETTLE_MS = 300;
 
 enum DesfireAction {
   DESFIRE_ACTION_SET_MASTER_KEY = 0,
@@ -289,6 +299,7 @@ enum DesfireAction {
   DESFIRE_ACTION_CREDIT,
   DESFIRE_ACTION_DEBIT,
   DESFIRE_ACTION_GET_VALUE,
+  DESFIRE_ACTION_CARD_INFO,
   DESFIRE_ACTION_COUNT
 };
 DesfireAction desfireModalAction = DESFIRE_ACTION_GET_VALUE;
@@ -305,6 +316,7 @@ const DesfireActionInfo DESFIRE_ACTIONS[DESFIRE_ACTION_COUNT] = {
   { "GUTHABEN BUCHEN",   "Bucht +100 auf das Guthaben." },
   { "GUTHABEN NUTZEN",   "Zieht -100 vom Guthaben ab (falls genug vorhanden)." },
   { "GUTHABEN ABFRAGEN", "Liest den aktuellen Guthabenstand." },
+  { "KARTEN INFO",       "Liest UID und DESFire-Kurzinfo der aufgelegten Karte (Details zusaetzlich in /desfire_log.txt)." },
 };
 
 const int MODAL_X = 24, MODAL_Y = 140, MODAL_W = 432, MODAL_H = 460;
@@ -363,7 +375,6 @@ const uint32_t SEND_INTERVAL_MS = 2000;
 const uint32_t RTC_UPDATE_INTERVAL_MS = 1000;
 const uint32_t SD_POLL_INTERVAL_MS = 2000;
 const uint32_t PN532_POLL_INTERVAL_MS = 300;
-const uint32_t PN532_DEBOUNCE_MS = 1000;
 
 uint8_t broadcastAddr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -387,7 +398,6 @@ char uidMsg[64] = "Noch keine Karte gelesen.";
 char desfireSummaryMsg[80] = "";
 const char *DESFIRE_LOG_PATH = "/desfire_log.txt";
 uint32_t lastPn532AttemptMs = 0;
-uint32_t lastUidReadMs = 0;
 
 // WLAN-IP -- WiFi.begin() passiert in dieser Stage ausschliesslich
 // innerhalb von syncFromNtp() (ESP-NOW braucht dafuer keine AP-
@@ -581,8 +591,10 @@ void updateReceivedInfo() {
 }
 
 // UID-Zeile + darunter eine kurze DESFire-Zusammenfassung (Details stehen
-// in /desfire_log.txt auf der SD-Karte, siehe desfireDeepRead()) -- wird
-// ausschliesslich aus loop()s PN532-Polling aufgerufen.
+// in /desfire_log.txt auf der SD-Karte, siehe desfireDeepRead()) -- zeigt
+// immer den Stand der LETZTEN Aktion (desfireOpBegin()/desfireOpFinish()),
+// da der PN532 nicht mehr staendig im Hintergrund abgefragt wird (siehe
+// DesfireModalState-Kommentar).
 void updateUidInfo() {
   canvas.fillRect(0, UID_INFO_Y, canvas.width(), UID_INFO_H, bgColors[bgIndex]);
   canvas.setTextDatum(lgfx::top_left);
@@ -738,7 +750,9 @@ void drawDesfireModalFrame() {
   canvas.println(DESFIRE_ACTIONS[desfireModalAction].title);
 }
 
-// Bestaetigungs-Ansicht: Beschreibung + ABBRECHEN/AUSFUEHREN.
+// Bestaetigungs-Ansicht: Beschreibung + ABBRECHEN/AUSFUEHREN. Die Karte
+// wird HIER noch nicht erwartet -- erst nach AUSFUEHREN wechselt das
+// Fenster in den aktiven Wartezustand (drawDesfireModalWaiting()).
 void drawDesfireModalConfirm() {
   drawDesfireModalFrame();
   canvas.setTextSize(1.5);
@@ -747,18 +761,46 @@ void drawDesfireModalConfirm() {
                                 MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
   canvas.setTextColor(TFT_YELLOW);
   canvas.setCursor(MODAL_X + 16, MODAL_Y + 60 + descLines * 20 + 16);
-  canvas.println("Karte auflegen, dann AUSFUEHREN tippen.");
+  canvas.println("AUSFUEHREN tippen, danach Karte auflegen.");
   drawButton(btnModalCancel, TFT_DARKGREY);
   drawButton(btnModalConfirm, TFT_DARKGREY);
 }
 
+// Aktiver Wartezustand: wird direkt nach AUSFUEHREN (schreibende Aktionen)
+// bzw. direkt nach dem KARTEN-INFO-Button (kein Bestaetigungsschritt noetig,
+// da rein lesend) angezeigt. loop() fragt den PN532 waehrend dieses
+// Zustands periodisch ab (siehe DesfireModalState-Kommentar) und fuehrt
+// die Aktion automatisch aus, sobald eine Karte erkannt wurde.
+void drawDesfireModalWaiting() {
+  drawDesfireModalFrame();
+  canvas.setTextSize(1.5);
+  canvas.setTextColor(TFT_YELLOW);
+  printWrapped("Karte jetzt auflegen -- die Aktion startet automatisch, sobald sie erkannt wird.",
+               MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
+  drawButton(btnModalCancel, TFT_DARKGREY);
+}
+
 // Ergebnis-Ansicht: Ergebnistext (desfireSummaryMsg, von der jeweiligen
-// desfireOpXxx()-Funktion gesetzt) + SCHLIESSEN.
+// desfireOpXxx()-Funktion gesetzt) + SCHLIESSEN. KARTEN INFO zeigt
+// zusaetzlich die UID-Zeile (uidMsg) -- eigener, mehrzeiliger Aufbau statt
+// eines einzelnen printWrapped()-Aufrufs, HIER ist der richtige Ort, um
+// spaeter weitere Karteninformationen zu ergaenzen (ein zusaetzlicher
+// printWrapped()-Aufruf pro neuer Information, y jeweils weiterzaehlen).
 void drawDesfireModalResult() {
   drawDesfireModalFrame();
   canvas.setTextSize(1.5);
-  canvas.setTextColor(TFT_GREENYELLOW);
-  printWrapped(desfireSummaryMsg, MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
+  int y = MODAL_Y + 60;
+  if (desfireModalAction == DESFIRE_ACTION_CARD_INFO) {
+    canvas.setTextColor(TFT_GREENYELLOW);
+    y += printWrapped(uidMsg, MODAL_X + 16, y, MODAL_W - 32, 20) * 20 + 12;
+    canvas.setTextColor(TFT_LIGHTGREY);
+    y += printWrapped(desfireSummaryMsg, MODAL_X + 16, y, MODAL_W - 32, 20) * 20 + 20;
+    canvas.setTextColor(TFT_DARKGREY);
+    printWrapped("Alle Details: /desfire_log.txt auf der SD-Karte.", MODAL_X + 16, y, MODAL_W - 32, 20);
+  } else {
+    canvas.setTextColor(TFT_GREENYELLOW);
+    printWrapped(desfireSummaryMsg, MODAL_X + 16, y, MODAL_W - 32, 20);
+  }
   drawButton(btnModalClose, TFT_DARKGREY);
 }
 
@@ -1072,17 +1114,17 @@ bool desfireOpBegin() {
   return true;
 }
 
-// Gemeinsamer Abschluss aller 7 Op-Funktionen: setzt den Piepton (kurz bei
-// Erfolg, lang bei Fehlschlag) und den Auto-Scan-Entprellzeitpunkt.
-// updateUidInfo() bleibt hier (zeichnet zwar nur auf den -- waehrend des
-// DESFire-Aktions-Fensters unsichtbaren -- Hauptbildschirm, schadet aber
-// nicht und sorgt dafuer, dass der Hauptbildschirm nach dem Schliessen des
-// Fensters bereits den richtigen Stand hat). Das eigentliche Ergebnis
-// zeigt loop() im Fenster selbst (drawDesfireModalResult()).
+// Gemeinsamer Abschluss aller Op-Funktionen: setzt den Piepton (kurz bei
+// Erfolg, lang bei Fehlschlag) -- IMMER erst hier, nie schon beim blossen
+// Erkennen der Karte (Nutzerwunsch). updateUidInfo() bleibt hier (zeichnet
+// zwar nur auf den -- waehrend des DESFire-Aktions-Fensters unsichtbaren
+// -- Hauptbildschirm, schadet aber nicht und sorgt dafuer, dass der
+// Hauptbildschirm nach dem Schliessen des Fensters bereits den richtigen
+// Stand hat). Das eigentliche Ergebnis zeigt loop() im Fenster selbst
+// (drawDesfireModalResult()).
 void desfireOpFinish(bool ok) {
   updateUidInfo();
   buzzerBeep(ok ? 80 : 300);
-  lastUidReadMs = millis();
 }
 
 // "MASTER-PW SETZEN": authentifiziert mit dem AKTUELL gueltigen Schluessel
@@ -1246,34 +1288,49 @@ void desfireOpDeleteApp() {
 }
 
 // "GUTHABEN BUCHEN": Credit + CommitTransaction (ohne Commit wird die
-// Buchung beim naechsten Kommando/Verlassen des Feldes verworfen).
+// Buchung beim naechsten Kommando/Verlassen des Feldes verworfen). Fragt
+// nach erfolgreicher Buchung zusaetzlich per GetValue den neuen Kontostand
+// ab und zeigt ihn zusammen mit dem gebuchten Betrag an (Nutzerwunsch --
+// vorher zeigte das Ergebnis nur "gebucht", nicht den resultierenden
+// Stand).
 void desfireOpCredit() {
   if (!desfireOpBegin()) return;
   bool ok = false;
+  int32_t newValue = 0;
+  bool haveNewValue = false;
 
   if (desfireSelectApplication(CUSTOM_AID)) {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireCredit(VALUE_FILE_NO, CREDIT_DEBIT_AMOUNT) && desfireCommitTransaction();
+      if (ok) haveNewValue = desfireGetValue(VALUE_FILE_NO, newValue);
     } else {
       logMsg("desfireOpCredit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
     }
   }
 
-  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben gebucht (+%ld)", (long)CREDIT_DEBIT_AMOUNT);
-  else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben buchen fehlgeschlagen");
+  if (ok && haveNewValue) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "+%ld gebucht, neuer Stand: %ld", (long)CREDIT_DEBIT_AMOUNT, (long)newValue);
+  } else if (ok) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben gebucht (+%ld)", (long)CREDIT_DEBIT_AMOUNT);
+  } else {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben buchen fehlgeschlagen");
+  }
   desfireOpFinish(ok);
 }
 
 // "GUTHABEN NUTZEN": Debit + CommitTransaction. Die KARTE SELBST lehnt
 // das Debit ab (typischerweise Status BOUNDARY_ERROR), wenn das Guthaben
 // dadurch unter VALUE_LOWER_LIMIT (0) fallen wuerde -- keine eigene
-// Vorab-Pruefung noetig.
+// Vorab-Pruefung noetig. Fragt nach erfolgreicher Buchung ebenfalls den
+// neuen Kontostand ab, siehe Kommentar bei desfireOpCredit().
 void desfireOpDebit() {
   if (!desfireOpBegin()) return;
   bool ok = false;
   bool debitRejected = false;
+  int32_t newValue = 0;
+  bool haveNewValue = false;
 
   if (desfireSelectApplication(CUSTOM_AID)) {
     uint8_t sessionKey[16], iv[16];
@@ -1281,6 +1338,7 @@ void desfireOpDebit() {
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (desfireDebit(VALUE_FILE_NO, CREDIT_DEBIT_AMOUNT)) {
         ok = desfireCommitTransaction();
+        if (ok) haveNewValue = desfireGetValue(VALUE_FILE_NO, newValue);
       } else {
         debitRejected = true;
       }
@@ -1289,9 +1347,15 @@ void desfireOpDebit() {
     }
   }
 
-  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben genutzt (-%ld)", (long)CREDIT_DEBIT_AMOUNT);
-  else if (debitRejected) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Zu wenig Guthaben (Debit abgelehnt)");
-  else snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben nutzen fehlgeschlagen");
+  if (ok && haveNewValue) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "-%ld gebucht, neuer Stand: %ld", (long)CREDIT_DEBIT_AMOUNT, (long)newValue);
+  } else if (ok) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben genutzt (-%ld)", (long)CREDIT_DEBIT_AMOUNT);
+  } else if (debitRejected) {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Zu wenig Guthaben (Debit abgelehnt)");
+  } else {
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben nutzen fehlgeschlagen");
+  }
   desfireOpFinish(ok);
 }
 
@@ -1317,6 +1381,18 @@ void desfireOpGetValue() {
   desfireOpFinish(ok);
 }
 
+// "KARTEN INFO": rein lesend, kein Bestaetigungsschritt (siehe Touch-
+// Handler unten -- springt direkt in MODAL_WAITING_CARD). Nutzt die
+// bestehende desfireDeepRead() (UID + Version + Anwendungen + Dateien,
+// Details in /desfire_log.txt) -- fuellt uidMsg + desfireSummaryMsg, die
+// drawDesfireModalResult() fuer diese Aktion beide anzeigt. Hier ist der
+// richtige Ort, um spaeter weitere Karteninformationen zu ergaenzen.
+void desfireOpCardInfo() {
+  if (!desfireOpBegin()) return;
+  desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
+  desfireOpFinish(true);
+}
+
 // Fuehrt die zum aktuell gewaehlten Fenster gehoerende DESFire-Aktion aus
 // (siehe DesfireModalState/loop()) -- muss NACH den desfireOpXxx()-
 // Funktionen stehen: anders als beim .ino-Build (Arduino-IDE, automatische
@@ -1332,6 +1408,7 @@ void desfireRunModalAction(DesfireAction action) {
     case DESFIRE_ACTION_CREDIT:           desfireOpCredit(); break;
     case DESFIRE_ACTION_DEBIT:            desfireOpDebit(); break;
     case DESFIRE_ACTION_GET_VALUE:        desfireOpGetValue(); break;
+    case DESFIRE_ACTION_CARD_INFO:        desfireOpCardInfo(); break;
     default: break;
   }
 }
@@ -1494,17 +1571,17 @@ uint32_t lastSdPollMs = 0;
 void loop() {
   uint32_t now = millis();
 
-  // Der komplette Hintergrund-Block (Uhrzeit, SD-Polling, WLAN-Polling,
-  // ESP-NOW-Senden, automatischer Lese-Scan) pausiert KOMPLETT, solange
-  // ein DESFire-Aktions-Fenster offen ist (siehe DesfireModalState) --
-  // sonst wuerde jeder dieser periodischen Redraws Teile des
-  // Hauptbildschirms unter dem Fenster neu zeichnen, was durch das
-  // Fenster "durchscheinen" wuerde (alles ein einziger flacher
-  // Framebuffer ohne echte Fenster-Ueberlagerung/Z-Ordnung). Der
-  // automatische Lese-Scan war zusaetzlich vorher die Ursache dafuer,
-  // dass ein Tastendruck-Ergebnis fast sofort wieder ueberschrieben
-  // wurde -- mit eigenem Fenster ist das jetzt strukturell ausgeschlossen,
-  // nicht mehr nur durch eine Wartezeit kaschiert.
+  // Der Hintergrund-Block (Uhrzeit, SD-Polling, WLAN-Polling, ESP-NOW-
+  // Senden) pausiert KOMPLETT, solange ein DESFire-Aktions-Fenster oder
+  // ein Untermenue offen ist (siehe DesfireModalState) -- sonst wuerde
+  // jeder dieser periodischen Redraws Teile des Hauptbildschirms unter
+  // dem Fenster neu zeichnen, was durch das Fenster "durchscheinen"
+  // wuerde (alles ein einziger flacher Framebuffer ohne echte Fenster-
+  // Ueberlagerung/Z-Ordnung). Das PN532-Polling ist NICHT mehr Teil
+  // dieses Blocks -- es lief frueher hier automatisch mit (bei jeder
+  // erkannten Karte), was auf Nutzerwunsch entfernt wurde; die PN532-
+  // Abfrage passiert jetzt ausschliesslich im eigenen
+  // MODAL_WAITING_CARD-Block direkt im Anschluss.
   if (desfireModalState == MODAL_CLOSED && !settingsOpen && !logViewOpen) {
     // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/geloggt -- siehe
     // Kommentar bei recvPending oben.
@@ -1554,37 +1631,42 @@ void loop() {
       esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
       updateSendInfo();
     }
+  }
 
-    // Poll-Versuch, danach 1s Entprellen, damit eine aufliegende Karte nicht
-    // staendig neu "erkannt" wird. NUR EIN Aufruf von inListPassiveTarget()
-    // fuer Erkennung UND Aktivierung -- ein zusaetzlicher
-    // readPassiveTargetID()-Aufruf davor (frueherer Ansatz) sendet dasselbe
-    // native InListPassiveTarget-Kommando ein zweites Mal an eine schon
-    // aktivierte Karte und schlug an echter Hardware regelmaessig fehl
-    // ("DESFire: inListPassiveTarget() fehlgeschlagen" trotz zuvor
-    // erfolgreich gelesener UID -- siehe Kopfkommentar der Datei).
-    //
-    // WICHTIG: Diese Bibliotheksversion (adafruit/Adafruit PN532@^1.3.3)
-    // bietet inListPassiveTarget() NUR parameterlos an -- keine Ueberladung
-    // mit Timeout-Argument (ein frueherer Versuch, hier explizit ein 100ms-
-    // Timeout zu uebergeben, ist am echten Build mit "no matching function"
-    // gescheitert). Das eigentliche Problem liegt ohnehin nicht am Software-
-    // Timeout dieses Aufrufs, sondern daran, wie oft der PN532-CHIP SELBST
-    // intern nach einer Karte sucht, bevor er ueberhaupt antwortet -- siehe
-    // nfc.setPassiveActivationRetries(1) in pn532Begin().
-    if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
-      lastPn532AttemptMs = now;
-      if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
+  // Aktives Warten auf eine Karte (Nutzerwunsch): der PN532 wird NUR HIER
+  // und NUR waehrend MODAL_WAITING_CARD abgefragt, nicht mehr staendig im
+  // Hintergrund wie frueher -- ausgeloest durch AUSFUEHREN im
+  // Bestaetigungsfenster bzw. direkt durch den KARTEN-INFO-Button (siehe
+  // Touch-Handler unten). NUR EIN Aufruf von inListPassiveTarget() fuer
+  // Erkennung UND Aktivierung -- ein zusaetzlicher readPassiveTargetID()-
+  // Aufruf davor (frueherer Ansatz) sendet dasselbe native
+  // InListPassiveTarget-Kommando ein zweites Mal an eine schon aktivierte
+  // Karte und schlug an echter Hardware regelmaessig fehl (siehe
+  // Kopfkommentar der Datei). Nach dem ERSTEN Erkennen wird
+  // DESFIRE_CARD_SETTLE_MS gewartet (kein weiterer inListPassiveTarget()-
+  // Aufruf in dieser Zeit), bevor die eigentliche Aktion startet -- die
+  // jeweilige desfireOpXxx()-Funktion aktiviert die Karte danach selbst
+  // erneut ueber desfireOpBegin(). Piepen passiert ausschliesslich am Ende
+  // ueber desfireOpFinish(), nie schon beim blossen Erkennen.
+  //
+  // WICHTIG: Diese Bibliotheksversion (adafruit/Adafruit PN532@^1.3.3)
+  // bietet inListPassiveTarget() NUR parameterlos an -- keine Ueberladung
+  // mit Timeout-Argument. Das eigentliche Timing-Problem liegt ohnehin
+  // nicht am Software-Timeout dieses Aufrufs, sondern daran, wie oft der
+  // PN532-CHIP SELBST intern nach einer Karte sucht, bevor er ueberhaupt
+  // antwortet -- siehe nfc.setPassiveActivationRetries(1) in pn532Begin().
+  if (desfireModalState == MODAL_WAITING_CARD) {
+    if (desfireWaitCardDetectedMs == 0) {
+      if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
+        lastPn532AttemptMs = now;
         if (nfc.inListPassiveTarget()) {
-          desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
-          updateUidInfo();
-          // Erst piepen, wenn der komplette Lesevorgang abgeschlossen ist --
-          // vorher piepte es sofort bei Kartenerkennung, noch bevor ueberhaupt
-          // feststand, ob/was gelesen werden konnte.
-          buzzerBeep(80);
-          lastUidReadMs = now;
+          desfireWaitCardDetectedMs = now;
         }
       }
+    } else if (now - desfireWaitCardDetectedMs >= DESFIRE_CARD_SETTLE_MS) {
+      desfireRunModalAction(desfireModalAction); // setzt desfireSummaryMsg, piept via desfireOpFinish()
+      desfireModalState = MODAL_RESULT;
+      drawDesfireModalResult();
     }
   }
 
@@ -1624,10 +1706,18 @@ void loop() {
         desfireModalState = MODAL_CLOSED;
         redrawMainScreen();
       } else if (inside(btnModalConfirm, x, y)) {
-        drawButton(btnModalConfirm, TFT_GREEN);
-        desfireRunModalAction(desfireModalAction); // setzt desfireSummaryMsg, piept via desfireOpFinish()
-        desfireModalState = MODAL_RESULT;
-        drawDesfireModalResult();
+        buzzerBeep(80); // Tastendruck-Feedback -- das Ergebnis piept separat via desfireOpFinish()
+        desfireModalState = MODAL_WAITING_CARD;
+        desfireWaitCardDetectedMs = 0;
+        drawDesfireModalWaiting();
+      }
+      delay(150);
+      return;
+    } else if (desfireModalState == MODAL_WAITING_CARD) {
+      if (inside(btnModalCancel, x, y)) {
+        buzzerBeep(80);
+        desfireModalState = MODAL_CLOSED;
+        redrawMainScreen();
       }
       delay(150);
       return;
@@ -1713,6 +1803,14 @@ void loop() {
       logScrollOffset = 0; // beim Oeffnen immer die neuesten Zeilen zeigen
       logViewOpen = true;
       drawLogView();
+    } else if (inside(btnCardInfo, x, y)) {
+      // Rein lesend -- kein Bestaetigungsschritt, springt direkt in den
+      // aktiven Wartezustand (siehe DesfireModalState-Kommentar oben).
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_CARD_INFO;
+      desfireModalState = MODAL_WAITING_CARD;
+      desfireWaitCardDetectedMs = 0;
+      drawDesfireModalWaiting();
     } else if (inside(btnSetMasterKey, x, y)) {
       buzzerBeep(80);
       desfireModalAction = DESFIRE_ACTION_SET_MASTER_KEY;
