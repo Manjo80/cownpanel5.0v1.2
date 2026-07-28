@@ -710,6 +710,77 @@ ACR122U an einem PC mit `libnfc`/`libfreefare`, oder ein Python-Skript mit
 das Problem im eigenen Code oder in einer Karten-/Chip-Eigenheit liegt,
 die keine reine Log-Analyse mehr aufdecken kann.
 
+**Nachtrag 4 — GELÖST (per unabhängiger Gegenprobe mit einem iCopy X /
+Proxmark3): Kommando 0x0A war falsch, richtig ist 0x1A.** Genau die oben
+empfohlene Gegenprobe wurde durchgeführt: ein iCopy X (Proxmark3-
+iceman-Firmware) mit `hf mfdes auth -n 0 -t 2tdea -k
+00000000000000000000000000000000` gegen dieselbe physische Karte —
+**Ergebnis: "PICC selected and authenticated succesfully"**. Das beweist
+zweifelsfrei: der Werks-Default-Schlüssel (16 Nullbytes) ist korrekt,
+unser eigener Code hatte tatsächlich einen Bug.
+
+Der tatsächliche Proxmark3-Quellcode (RfidResearchGroup/proxmark3,
+`client/src/mifare/desfirecore.c`, Funktion `DesfireAuthenticateEV1()`)
+wurde direkt von GitHub geladen und gelesen (nicht nur zusammengefasst).
+Zentraler Fund: Für einen 2K3DES-artigen Schlüssel sendet Proxmark3 im
+"EV1"-Sicherheitskanal (den es für diese Karte automatisch wählt, siehe
+`Secure channel: ev1` in der obigen Ausgabe) **Kommando `0x1A`
+(`AUTHENTICATE_ISO`), NICHT `0x0A` (`AUTHENTICATE`/"Legacy")**:
+
+```c
+if (secureChannel == DACEV1) {
+    if (dctx->keyType == T_AES)
+        subcommand = MFDES_AUTHENTICATE_AES;
+    else
+        subcommand = MFDES_AUTHENTICATE_ISO;   // 0x1A, nicht 0x0A!
+}
+```
+
+Unser Code (und die als Referenz genutzte libfreefare, die für einen
+2K3DES-Schlüssel `AUTHENTICATE_LEGACY`/`0x0A` wählt — nachvollziehbar,
+libfreefare stammt primär aus der EV0/EV1-Ära) sendete bisher immer
+`0x0A`. Die Karte akzeptiert `0x0A` zwar SYNTAKTISCH (Status `0x00` in
+Schritt 2), verarbeitet es aber intern offenbar anders als `0x1A` — exakt
+das erklärt das beobachtete Muster ("formal angenommen, aber die eigene
+Rückprüfung passt nie"). Krypto-Struktur und IV-Verkettung sind zwischen
+`0x0A` und `0x1A` laut Proxmark3-Quellcode IDENTISCH (beide nutzen
+verkettetes CBC über die gesamte Sitzung, normale Verschlüsselung für den
+PCD→PICC-Schritt) — nur das Kommandobyte unterscheidet sich. **Fix:**
+`desfireAuthDes3()` sendet jetzt `0x1A` statt `0x0A`. Die zuvor (Nachtrag
+1) eingebaute "Legacy sendet mit Entschlüsselungs- statt
+Verschlüsselungs-Chiffre"-Sonderbehandlung (basierend auf libfreefares
+`AUTHENTICATE_LEGACY`-Fallunterscheidung) wurde wieder entfernt — sie war
+beim Werks-Nullschlüssel ohnehin mathematisch wirkungslos (siehe
+Nachtrag 1) und passt nicht zum jetzt bestätigten EV1-Pfad.
+
+**Zwei weitere, ebenfalls gegen den Proxmark3-Quellcode verifizierte
+Bugfixes** (beide erst NACH erfolgreicher Authentifizierung relevant,
+für `desfireChangeKeySame()` direkt im Anschluss — ohne sie wäre
+"MASTER-PW SETZEN" trotz jetzt erfolgreicher Authentifizierung
+vermutlich am ChangeKey-Schritt gescheitert):
+
+1. **IV nach Authentifizierung ist 0, nicht der letzte Chiffretext-
+   Block.** `desfireAuthDes3()`/`desfireAuthAes()` gaben bisher über
+   `ivOut` den letzten ausgetauschten Chiffretext-Block zurück — laut
+   Proxmark3 (`memset(dctx->IV, 0, ...)` direkt nach der
+   Sitzungsschlüssel-Berechnung) ist der korrekte Start-IV für ein
+   direkt folgendes Kommando wie ChangeKey aber schlicht **Null**.
+2. **Sitzungsschlüssel-Sonderfall bei K1==K2 (Werks-Default!).** Die
+   normale Formel `RndA[0:4] + RndB[0:4] + RndA[4:8] + RndB[4:8]` gilt
+   nur, wenn die beiden 8-Byte-Hälften des Authentifizierungsschlüssels
+   verschieden sind. Beim Werks-Default (16 Nullbytes, K1=K2, siehe
+   Kopfkommentar bei `desfireDes3SetKey()`) muss die zweite Hälfte des
+   Sitzungsschlüssels stattdessen die ERSTE wiederholen (Proxmark3-
+   Kommentar: *"If the 3Des key first 8 bytes = 2nd 8 Bytes then we are
+   really using Singe Des... we need to set the session key such that
+   the 2nd 8 bytes = 1st 8 bytes"*) — genau der Fall, der bei
+   "MASTER-PW SETZEN" mit noch unverändertem Werksschlüssel eintritt.
+
+**Wichtiger Hinweis:** Dieser Fix wurde bisher NICHT an echter Hardware
+gegengetestet (nur die Proxmark3-Gegenprobe bestätigt den Schlüssel und
+das Kommando-Byte, nicht unseren eigenen Code erneut). Bitte nach dem
+nächsten Flash erneut "MASTER-PW SETZEN" probieren und das Log schicken.
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele

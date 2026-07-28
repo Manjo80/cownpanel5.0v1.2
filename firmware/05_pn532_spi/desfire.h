@@ -5,9 +5,11 @@
 //
 // AUSDRUECKLICH BEGRENZTER UMFANG (bewusste Entscheidung, siehe
 // firmware/README.md):
-//  - Unterstuetzt Legacy-2K3DES- (Kommando 0x0A) und AES-128- (Kommando
-//    0xAA) Authentifizierung mit einem 16-Byte-Schluessel (Default-Schluessel
-//    = 16 Nullbytes). KEIN 3K3DES, KEIN EV2-Secure-Messaging.
+//  - Unterstuetzt 2K3DES- (Kommando 0x1A, AUTHENTICATE_ISO -- siehe
+//    Kommentar bei desfireAuthDes3(), warum NICHT das "klassische"
+//    Legacy-Kommando 0x0A) und AES-128- (Kommando 0xAA) Authentifizierung
+//    mit einem 16-Byte-Schluessel (Default-Schluessel = 16 Nullbytes).
+//    KEIN 3K3DES, KEIN EV2-Secure-Messaging.
 //  - Session-Key wird aus RndA/RndB abgeleitet und NUR fuer ChangeKey
 //    genutzt (siehe desfireChangeKeySame()) -- KEIN CMAC, KEIN
 //    Enciphered-Datenverkehr fuer Lese-/Schreib-Dateizugriffe. Dateien im
@@ -490,39 +492,6 @@ inline void desfireAesCbc(const uint8_t key16[16], const uint8_t iv[16], bool en
   mbedtls_aes_free(&ctx);
 }
 
-// SONDERFALL Legacy-2K3DES-Authentifizierung (Kommando 0x0A), NUR fuer das
-// PCD->PICC-Kryptogramm (RndA||RndB') in desfireAuthDes3(): Die NXP-Legacy-
-// Authentifizierung verwendet dafuer NICHT normale CBC-Verschluesselung,
-// sondern (dokumentierte Eigenheit, gegen die quelloffene Referenz-
-// implementierung libfreefare/mifare_desfire.c geprueft: dort wird fuer
-// AUTHENTICATE_LEGACY an dieser Stelle MCO_DECYPHER statt MCO_ENCYPHER an
-// mifare_cypher_blocks_chained() uebergeben) die STRUKTUR von CBC-
-// Verschluesselung (IV vor der Chiffre XOR-verknuepft, Chiffretext wird
-// neuer IV), aber mit der ENTSCHLUESSELUNGS-Funktion des Blockchiffre als
-// Primitiv statt der Verschluesselungsfunktion. Nur bei einem Schluessel
-// mit K1!=K2 (z. B. CUSTOM_KEY) macht das ueberhaupt einen Unterschied --
-// bei K1=K2 (Werks-Default, alle Nullbytes) sind Ver- und Entschluesselung
-// mathematisch identisch (jede DES-Rundenschluesselfolge ist dann
-// palindromisch), weshalb dieser Bug beim Werksschluessel unsichtbar
-// bleibt, aber bei CUSTOM_KEY (echter, zufaelliger 16-Byte-Schluessel)
-// sehr wohl zuschlagen wuerde. AES/ISO-Authentifizierung (desfireAuthAes())
-// braucht das NICHT -- dort verwendet libfreefare an derselben Stelle ganz
-// normal MCO_ENCYPHER.
-inline void desfireDes3CbcSendLegacy(const uint8_t key16[16], const uint8_t iv[8],
-                                      const uint8_t *in, uint8_t *out, size_t len) {
-  Des3Keys keys;
-  desfireDes3SetKey(key16, keys);
-  uint8_t ivBuf[8];
-  memcpy(ivBuf, iv, 8);
-  size_t blocks = len / 8;
-  for (size_t b = 0; b < blocks; b++) {
-    uint8_t xored[8];
-    for (int i = 0; i < 8; i++) xored[i] = in[b * 8 + i] ^ ivBuf[i];
-    des3CryptBlockEde(keys, false, xored, out + b * 8); // false = Entschluesselungs-Chiffre (Legacy-Eigenheit)
-    memcpy(ivBuf, out + b * 8, 8);
-  }
-}
-
 // Formatiert bis zu 16 Byte als Hex-String fuers Log -- reine Diagnose-
 // Hilfsfunktion, um bei einem Authentifizierungsfehlschlag die tatsaechlich
 // ausgetauschten Rohdaten sichtbar zu machen (z. B. um zu pruefen, ob eine
@@ -537,16 +506,37 @@ inline void logHex(const char *label, const uint8_t *data, size_t len) {
   logMsg("  %s: %s", label, hex);
 }
 
-// Legacy-2K3DES-Authentifizierung (Kommando 0x0A), ISO/IEC-9798-2-3-Pass-
-// Mutual-Authentication. key16 = 16-Byte-Schluessel (Werks-Default:
-// 16 Nullbytes). sessionKeyOut wird bei Erfolg befuellt. ivOut (falls
-// nicht nullptr) bekommt den LETZTEN in dieser Sitzung ausgetauschten
-// Chiffretext-Block (8 Byte) -- wird als IV fuer das naechste
-// verschluesselte Kommando in DERSELBEN Sitzung gebraucht (z. B.
-// ChangeKey direkt nach der Authentifizierung, siehe
-// desfireChangeKeySame()). Chiffretext-Chaining wird hier NICHT ueber
-// mehrere Kommandos hinweg verwaltet -- jeder Aufruf, der einen IV
-// braucht, bekommt ihn explizit uebergeben.
+// 2K3DES-Authentifizierung, ISO/IEC-9798-2-3-Pass-Mutual-Authentication.
+// key16 = 16-Byte-Schluessel (Werks-Default: 16 Nullbytes). sessionKeyOut
+// wird bei Erfolg befuellt. ivOut (falls nicht nullptr) bekommt den IV
+// fuer ein direkt folgendes verschluesseltes Kommando in DERSELBEN
+// Sitzung (z. B. ChangeKey, siehe desfireChangeKeySame()) -- das ist NACH
+// erfolgreicher Authentifizierung wieder 8 Nullbytes, NICHT der letzte
+// ausgetauschte Chiffretext-Block (gegen echte Hardware per Proxmark3
+// verifiziert, siehe unten).
+//
+// Verwendet Kommando 0x1A (AUTHENTICATE_ISO), NICHT 0x0A
+// (AUTHENTICATE/"Legacy"): Mit 0x0A akzeptierte eine echte DESFire-EV3-
+// Karte (Werks-Default-Schluessel) zwar formal Schritt 2 (Status 0x00),
+// aber die eigene Rueckpruefung von Schritt 4 schlug IMMER fehl -- per
+// unabhaengigem Proxmark3-Test (Kommando "hf mfdes auth -n 0 -t 2tdea -k
+// <16 Nullbytes>", Firmware iceman-Fork) an genau dieser Karte bestaetigt:
+// der Schluessel ist tatsaechlich der Werks-Default, Proxmark3
+// authentifiziert erfolgreich -- ABER Proxmark3 verwendet dafuer intern
+// "Secure channel: ev1" und damit Kommando 0x1A (nicht 0x0A) fuer einen
+// Nicht-AES-Schluessel (siehe RfidResearchGroup/proxmark3,
+// desfirecore.c::DesfireAuthenticateEV1(), Zeile ~1362: bei
+// secureChannel==DACEV1 wird subcommand=MFDES_AUTHENTICATE_ISO=0x1A statt
+// MFDES_AUTHENTICATE=0x0A gesendet). Kryptografie/IV-Verkettung sind
+// zwischen 0x0A und 0x1A identisch (siehe Proxmark3-Quellcode) -- nur das
+// Kommandobyte unterscheidet sich, aber die Karte behandelt beide
+// offenbar unterschiedlich intern. Alte, an dieser Stelle hier ausprobierte
+// Theorie ("Legacy-0x0A braucht Entschluesselungs- statt
+// Verschluesselungs-Chiffre fuers PCD->PICC-Kryptogramm", nach
+// libfreefare) war beim Werks-Nullschluessel mathematisch unwirksam
+// (Ver-/Entschluesselung sind dort identisch) und hat das eigentliche
+// Problem nicht behoben -- daher wieder normale Verschluesselung
+// (encrypt=true unten), passend zu Proxmark3s EV1-Pfad.
 inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16],
                              uint8_t ivOut[8] = nullptr) {
   // Bis zu 3 komplette Versuche, ABER NUR falls die Karte in Schritt 2
@@ -562,7 +552,7 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
   // Luftschnittstelle -- ein erneuter (komplett neuer) Challenge-Response-
   // Durchlauf behebt das typischerweise.
   for (int attempt = 1; attempt <= 3; attempt++) {
-    uint8_t send1[2] = { 0x0A, keyNo };
+    uint8_t send1[2] = { 0x1A, keyNo }; // AUTHENTICATE_ISO -- siehe Funktionskommentar (NICHT 0x0A)
     uint8_t resp[32];
     uint8_t respLen = sizeof(resp);
     if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 9 || resp[0] != 0xAF) {
@@ -589,7 +579,7 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
     memcpy(plainAB + 8, rndBRot, 8);
 
     uint8_t encAB[16];
-    desfireDes3CbcSendLegacy(key16, encRndB, plainAB, encAB, 16); // IV = encRndB (Chiffretext-Chaining); Legacy-Sonderfall siehe Funktionskommentar
+    desfireDes3Cbc(key16, encRndB, true, plainAB, encAB, 16); // IV = encRndB (Chiffretext-Chaining)
 
     uint8_t send2[17];
     send2[0] = 0xAF;
@@ -612,12 +602,30 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
     desfireRotateLeft1(rndAExpectedRot, 8);
 
     if (memcmp(rndARot, rndAExpectedRot, 8) == 0) {
-      // Sitzungsschluessel (2K3DES): RndA[0:4] + RndB[0:4] + RndA[4:8] + RndB[4:8]
+      // Sitzungsschluessel (2K3DES): RndA[0:4] + RndB[0:4] + RndA[4:8] + RndB[4:8].
       memcpy(sessionKeyOut, rndA, 4);
       memcpy(sessionKeyOut + 4, rndB, 4);
       memcpy(sessionKeyOut + 8, rndA + 4, 4);
       memcpy(sessionKeyOut + 12, rndB + 4, 4);
-      if (ivOut) memcpy(ivOut, encRndAResp, 8);
+      // SONDERFALL K1==K2 (z. B. Werks-Default, 16 Nullbytes -- 2K3DES
+      // reduziert dann auf Single-DES, siehe Kopfkommentar bei
+      // desfireDes3SetKey()): dann muss die zweite Haelfte des
+      // Sitzungsschluessels die ERSTE wiederholen, NICHT RndA[4:8]/
+      // RndB[4:8] verwenden -- gegen Proxmark3 (desfirecore.c, Kommentar
+      // "If the 3Des key first 8 bytes = 2nd 8 Bytes then we are really
+      // using Singe Des... we need to set the session key such that the
+      // 2nd 8 bytes = 1st 8 bytes") verifiziert. Betrifft direkt den
+      // Werks-Default-Fall von "MASTER-PW SETZEN" (siehe
+      // desfireChangeKeySame(), direkt nach dieser Authentifizierung).
+      if (memcmp(key16, key16 + 8, 8) == 0) {
+        memcpy(sessionKeyOut + 8, sessionKeyOut, 8);
+      }
+      // IV fuer ein direkt folgendes Kommando (z. B. ChangeKey) ist NACH
+      // erfolgreicher Authentifizierung 8 Nullbytes, nicht der letzte
+      // Chiffretext-Block -- gegen Proxmark3 (desfirecore.c:
+      // "memset(dctx->IV, 0, ...)" direkt nach Session-Key-Berechnung)
+      // verifiziert.
+      if (ivOut) memset(ivOut, 0, 8);
       return true;
     }
 
@@ -713,7 +721,9 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
       memcpy(sessionKeyOut + 4, rndB, 4);
       memcpy(sessionKeyOut + 8, rndA + 12, 4);
       memcpy(sessionKeyOut + 12, rndB + 12, 4);
-      if (ivOut) memcpy(ivOut, encRndAResp, 16);
+      // IV nach erfolgreicher Authentifizierung: 16 Nullbytes, siehe
+      // Kommentar bei desfireAuthDes3()/ivOut.
+      if (ivOut) memset(ivOut, 0, 16);
       return true;
     }
 
@@ -817,18 +827,20 @@ inline bool desfireAuthEitherKey(uint8_t keyNo, const uint8_t customKey16[16], u
 // implementiert, da hier nirgends gebraucht.
 //
 // Kryptogramm-Layout (aus der oeffentlich dokumentierten NXP-Spezifikation
-// bzw. quelloffenen Referenzimplementierungen wie libfreefare
+// bzw. quelloffenen Referenzimplementierungen wie libfreefare/Proxmark3
 // rekonstruiert):
 //   2K3DES: NewKey(16) + CRC16(NewKey)(2) -> auf 24 Byte nullgepolstert,
-//           2K3DES-CBC mit dem Sitzungsschluessel, IV = letzter
-//           Chiffretext-Block aus der Authentifizierung.
+//           2K3DES-CBC mit dem Sitzungsschluessel, IV = 8 Nullbytes (der
+//           Startzustand direkt nach erfolgreicher Authentifizierung,
+//           siehe ivOut-Kommentar bei desfireAuthDes3() -- NICHT der
+//           letzte Chiffretext-Block aus der Authentifizierung, wie eine
+//           frühere Version dieses Kommentars annahm).
 //   AES:    NewKey(16) + KeyVersion(1) + CRC32(0xC4,KeyNo,NewKey,KeyVersion)(4)
 //           -> auf 32 Byte nullgepolstert, AES-CBC mit dem
-//           Sitzungsschluessel, IV = letzter Chiffretext-Block aus der
-//           Authentifizierung. WICHTIG: bei AES deckt die CRC den
-//           Kommando-Header (0xC4+KeyNo) mit ab, bei 2K3DES NICHT --
-//           diese Asymmetrie ist Absicht (nicht mein Fehler), siehe
-//           Referenzimplementierung.
+//           Sitzungsschluessel, IV = 16 Nullbytes (siehe oben). WICHTIG:
+//           bei AES deckt die CRC den Kommando-Header (0xC4+KeyNo) mit
+//           ab, bei 2K3DES NICHT -- diese Asymmetrie ist Absicht (nicht
+//           mein Fehler), siehe Referenzimplementierung.
 inline bool desfireChangeKeySame(uint8_t keyNo, const uint8_t newKey16[16],
                                   const uint8_t sessionKey16[16], const uint8_t iv[16], bool isAes) {
   uint8_t plain[32] = {0};
