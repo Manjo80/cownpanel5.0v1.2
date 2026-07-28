@@ -64,12 +64,64 @@
 #include <Adafruit_PN532.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include "pins.h"
 #include "rgb_panel.h"
 #include "touch_standalone.h"
 #include "touch_probe.h"
 #include "backlight_buzzer.h"
 #include "rtc_pcf8563.h"
+
+// Log-Ringpuffer fuer das Log-Panel unter den Buttons (siehe drawLogPanel()
+// weiter unten) -- MUSS vor "#include desfire.h" stehen, da desfire.h
+// logMsg() statt Serial.print*() nutzt (Aufruf vor Definition kompiliert
+// bei PlatformIOs main.cpp -- anders als bei der Arduino-IDE, die
+// automatisch Prototypen generiert -- nicht, siehe Kommentar bei
+// desfireRunModalAction()). Nur die Textverwaltung + Serial-Ausgabe
+// stehen hier; das eigentliche Zeichnen (drawLogPanel(), braucht "canvas")
+// passiert separat, canvas ist an dieser Stelle noch nicht deklariert.
+const int LOG_LINES = 60;
+const int LOG_LINE_LEN = 72;
+char logBuffer[LOG_LINES][LOG_LINE_LEN];
+int logHead = 0;       // naechster Schreibindex (Ringpuffer)
+int logCount = 0;      // Anzahl gueltiger Zeilen (bis LOG_LINES)
+int logScrollOffset = 0; // 0 = neueste Zeilen sichtbar (ganz "unten")
+// Erst true, wenn setup() fertig ist (Canvas/Panel initialisiert) --
+// logMsg() zeichnet das Log-Panel nur dann live nach, sonst wuerde ein
+// logMsg()-Aufruf waehrend setup() auf einen noch nicht existierenden
+// Framebuffer zugreifen. Vorwaertsdeklaration von drawLogPanel(): der
+// eigentliche Funktionskoerper (braucht "canvas") kommt erst viel
+// spaeter in der Datei, aber logMsg() -- ganz am Anfang der Datei, vor
+// "#include desfire.h" -- muss die Funktion schon aufrufen koennen.
+bool displayReady = false;
+void drawLogPanel();
+
+inline void logAdd(const char *line) {
+  strncpy(logBuffer[logHead], line, LOG_LINE_LEN - 1);
+  logBuffer[logHead][LOG_LINE_LEN - 1] = 0;
+  logHead = (logHead + 1) % LOG_LINES;
+  if (logCount < LOG_LINES) logCount++;
+}
+
+// Ersetzt Serial.println()/Serial.printf() im gesamten Sketch + in
+// desfire.h -- schreibt weiterhin nach Serial (nur falls ein Monitor
+// verbunden ist, siehe frueherer Fix), UND haengt die Zeile an den
+// Log-Ringpuffer fuer das Display-Log-Panel an.
+inline void logMsg(const char *fmt, ...) {
+  char buf[128];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  size_t len = strlen(buf);
+  while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+    buf[--len] = 0;
+  }
+  if (Serial) Serial.println(buf);
+  logAdd(buf);
+  if (displayReady) drawLogPanel();
+}
+
 #include "desfire.h"
 
 // Fuer echten NTP-Abgleich wifi_secrets.h anlegen (Kopie von
@@ -98,7 +150,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.1";
+const char *FIRMWARE_VERSION = "2026-07-28.2";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -130,25 +182,31 @@ struct Button {
 };
 
 // Layout fuer das gedrehte 480 (breit) x 800 (hoch) Koordinatensystem --
-// 2 Spalten x 6 Zeilen (letzte Zeile nur 1 Button), da mit den neuen
-// DESFire-Schreibfunktionen 11 Buttons noetig sind -- STELLEN (Compile-
-// Zeit) und BEEP sind auf Nutzerwunsch entfallen, dafuer WLAN/ESP-NOW-
-// Umschalter und 7 DESFire-Buttons dazugekommen.
+// 2 Spalten, da mit den neuen DESFire-Schreibfunktionen viele Buttons
+// noetig sind. NTP-SYNC/WLAN-ESP-NOW-Umschalter/BACKLIGHT +/- sind auf
+// Nutzerwunsch in ein EINSTELLUNGEN-Untermenue gewandert (Platz fuer das
+// Log-Panel unten, siehe drawLogPanel()) -- nur noch EIN Button dafuer im
+// Hauptbildschirm, die restliche Flaeche gehoert den 7 DESFire-Buttons
+// direkt darunter.
 const int BTN_COL_W = 216, BTN_H = 48, BTN_ROW_GAP = 60;
 const int BTN_LEFT_X = 16, BTN_RIGHT_X = 248;
 const int BTN_ROW1_Y = 310;
 
-Button btnNtpSync        = { BTN_LEFT_X,  BTN_ROW1_Y + 0 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "NTP-SYNC" };
-Button btnWifiToggle     = { BTN_RIGHT_X, BTN_ROW1_Y + 0 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "WLAN/ESP-NOW" };
-Button btnBrightUp       = { BTN_LEFT_X,  BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "BACKLIGHT +" };
-Button btnBrightDn       = { BTN_RIGHT_X, BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "BACKLIGHT -" };
-Button btnSetMasterKey   = { BTN_LEFT_X,  BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "MASTER-PW SETZEN" };
-Button btnResetMasterKey = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "AUF STANDARD" };
-Button btnCreateApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN" };
-Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP LOESCHEN" };
-Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
-Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
-Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
+Button btnSettingsOpen   = { BTN_LEFT_X,  BTN_ROW1_Y + 0 * BTN_ROW_GAP, 448,       BTN_H, "EINSTELLUNGEN" };
+Button btnSetMasterKey   = { BTN_LEFT_X,  BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "MASTER-PW SETZEN" };
+Button btnResetMasterKey = { BTN_RIGHT_X, BTN_ROW1_Y + 1 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "AUF STANDARD" };
+Button btnCreateApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN" };
+Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP LOESCHEN" };
+Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
+Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
+Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
+
+// EINSTELLUNGEN-Untermenue -- wiederverwendet dieselbe Fenstergeometrie
+// wie das DESFire-Aktions-Fenster (MODAL_X/Y/W/H, siehe unten), aber ohne
+// Bestaetigungsschritt: NTP-SYNC/WLAN-Umschalter/Backlight sind
+// unkritische, sofort rueckgaengig machbare Aktionen, im Gegensatz zu den
+// DESFire-Schreibkommandos.
+bool settingsOpen = false;
 
 // Custom-AID/-Schluessel fuer die DESFire-Schreibfunktionen -- alles
 // hardcoded, da das Panel keine Tastatur/Texteingabe hat (siehe
@@ -209,6 +267,26 @@ Button btnModalCancel  = { MODAL_X + 16, MODAL_BTN_Y, 190, 50, "ABBRECHEN" };
 Button btnModalConfirm = { MODAL_X + MODAL_W - 16 - 190, MODAL_BTN_Y, 190, 50, "AUSFUEHREN" };
 Button btnModalClose   = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "SCHLIESSEN" };
 
+// EINSTELLUNGEN-Untermenue -- gleiche Fenstergeometrie, eigene Buttons in
+// einem 2x2-Raster. Nutzt btnModalClose zum Schliessen mit (DESFire-
+// Fenster und Einstellungen sind nie gleichzeitig offen).
+Button btnSettingsNtpSync    = { MODAL_X + 16, MODAL_Y + 60, 190, 60, "NTP-SYNC" };
+Button btnSettingsWifiToggle = { MODAL_X + MODAL_W - 16 - 190, MODAL_Y + 60, 190, 60, "WLAN/ESP-NOW" };
+Button btnSettingsBrightUp   = { MODAL_X + 16, MODAL_Y + 60 + 76, 190, 60, "BACKLIGHT +" };
+Button btnSettingsBrightDn   = { MODAL_X + MODAL_W - 16 - 190, MODAL_Y + 60 + 76, 190, 60, "BACKLIGHT -" };
+
+// Log-Panel unter den Buttons (auf Nutzerwunsch) -- zeigt die letzten
+// Zeilen aus dem logMsg()-Ringpuffer, mit HOCH/RUNTER zum Scrollen durch
+// die Historie (bis zu LOG_LINES Zeilen zurueck). Bleibt AUCH sichtbar
+// (und aktualisiert live), waehrend das DESFire-Aktions-Fenster oder das
+// Einstellungen-Untermenue offen sind (beide enden bei y=600, das Panel
+// beginnt erst bei 610) -- genau dafuer gedacht: live mitverfolgen, was
+// waehrend einer Aktion passiert.
+const int LOG_PANEL_Y = 610, LOG_PANEL_H = 190, LOG_HEADER_H = 26;
+const int LOG_VISIBLE_LINES = 14;
+Button btnLogUp   = { 480 - 16 - 90, LOG_PANEL_Y + 2, 90, 22, "HOCH" };
+Button btnLogDown = { 480 - 16 - 90 - 8 - 90, LOG_PANEL_Y + 2, 90, 22, "RUNTER" };
+
 uint8_t backlightPercent = 80;
 
 const uint16_t bgColors[] = { TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_BLACK };
@@ -268,7 +346,8 @@ uint32_t lastUidReadMs = 0;
 // wurde, auch wenn der anschliessende NTP-Request selbst fehlschlaegt.
 char wifiIpMsg[48] = "WLAN: nicht verbunden";
 uint16_t wifiIpColor = TFT_LIGHTGREY;
-// Umschalter WLAN/ESP-NOW (siehe btnWifiToggle-Handler in loop()): false =
+// Umschalter WLAN/ESP-NOW (siehe btnSettingsWifiToggle-Handler in loop(),
+// im EINSTELLUNGEN-Untermenue): false =
 // ESP-NOW-Broadcast-Modus (Default, keine AP-Verbindung), true = mit dem
 // AP verbunden (fuer NTP-SYNC). WiFi.mode(WIFI_STA) bleibt in beiden
 // Faellen gesetzt -- ESP-NOW braucht das, aber keine AP-Assoziation.
@@ -351,10 +430,7 @@ void drawStaticParts() {
   canvas.print(WiFi.macAddress());
   canvas.printf("  v%s", FIRMWARE_VERSION);
 
-  drawButton(btnNtpSync, TFT_DARKGREY);
-  drawButton(btnWifiToggle, TFT_DARKGREY);
-  drawButton(btnBrightUp, TFT_DARKGREY);
-  drawButton(btnBrightDn, TFT_DARKGREY);
+  drawButton(btnSettingsOpen, TFT_DARKGREY);
   drawButton(btnSetMasterKey, TFT_DARKGREY);
   drawButton(btnResetMasterKey, TFT_DARKGREY);
   drawButton(btnCreateApp, TFT_DARKGREY);
@@ -495,6 +571,51 @@ void redrawMainScreen() {
   updateReceivedInfo();
   updateUidInfo();
   updateWifiInfo();
+  drawLogPanel();
+}
+
+// Zeichnet das Log-Panel (Kopfzeile mit HOCH/RUNTER + die aktuell
+// sichtbaren Zeilen aus dem Ringpuffer, siehe logScrollOffset). Wird von
+// logMsg() automatisch nach jeder neuen Zeile aufgerufen (sobald
+// displayReady true ist) UND von den HOCH/RUNTER-Buttons.
+void drawLogPanel() {
+  canvas.fillRect(0, LOG_PANEL_Y, canvas.width(), LOG_PANEL_H, TFT_BLACK);
+  canvas.drawRect(0, LOG_PANEL_Y, canvas.width(), LOG_PANEL_H, TFT_DARKGREY);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextSize(1);
+  canvas.setTextColor(TFT_LIGHTGREY);
+  canvas.setCursor(8, LOG_PANEL_Y + 5);
+  canvas.printf("LOG (%d/%d)", logCount - logScrollOffset, logCount);
+  drawButton(btnLogUp, TFT_DARKGREY);
+  drawButton(btnLogDown, TFT_DARKGREY);
+
+  canvas.setTextColor(TFT_GREENYELLOW);
+  int textTop = LOG_PANEL_Y + LOG_HEADER_H;
+  int endIdx = logCount - logScrollOffset; // exklusiv
+  int startIdx = endIdx - LOG_VISIBLE_LINES;
+  if (startIdx < 0) startIdx = 0;
+  for (int i = startIdx; i < endIdx; i++) {
+    int bufIdx = (logHead - logCount + i + LOG_LINES * 2) % LOG_LINES;
+    canvas.setCursor(8, textTop + (i - startIdx) * 12);
+    canvas.print(logBuffer[bufIdx]);
+  }
+}
+
+// EINSTELLUNGEN-Untermenue: NTP-SYNC/WLAN-Umschalter/Backlight, ohne
+// Bestaetigungsschritt (unkritische Aktionen, siehe Deklaration oben).
+void drawSettingsMenu() {
+  canvas.fillRoundRect(MODAL_X, MODAL_Y, MODAL_W, MODAL_H, 12, TFT_NAVY);
+  canvas.drawRoundRect(MODAL_X, MODAL_Y, MODAL_W, MODAL_H, 12, TFT_WHITE);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextColor(TFT_WHITE);
+  canvas.setTextSize(2);
+  canvas.setCursor(MODAL_X + 16, MODAL_Y + 16);
+  canvas.println("EINSTELLUNGEN");
+  drawButton(btnSettingsNtpSync, TFT_DARKGREY);
+  drawButton(btnSettingsWifiToggle, TFT_DARKGREY);
+  drawButton(btnSettingsBrightUp, TFT_DARKGREY);
+  drawButton(btnSettingsBrightDn, TFT_DARKGREY);
+  drawButton(btnModalClose, TFT_DARKGREY);
 }
 
 // Gibt Text zeilenweise aus, bricht zwischen Woertern um, damit jede
@@ -587,14 +708,14 @@ void formatTimestamp(char *buf, size_t bufLen) {
 void logSessionStart() {
   File f = SD.open(LOG_FILE_PATH, FILE_APPEND);
   if (!f) {
-    Serial.println("logSessionStart(): SD.open() fehlgeschlagen");
+    logMsg("logSessionStart(): SD.open() fehlgeschlagen");
     return;
   }
   char ts[32];
   formatTimestamp(ts, sizeof(ts));
   f.printf("--- Log gestartet %s ---\n", ts);
   f.close();
-  Serial.println("logSessionStart(): Startmarke geschrieben.");
+  logMsg("logSessionStart(): Startmarke geschrieben.");
 }
 
 // Haengt die zuletzt empfangene ESP-NOW-Nachricht mit RTC-Zeitstempel an
@@ -629,7 +750,7 @@ void checkSdCard() {
       probe.close();
       return; // weiterhin da, nichts zu tun
     }
-    Serial.println("checkSdCard(): Log-Datei nicht mehr erreichbar -- Karte vermutlich entfernt.");
+    logMsg("checkSdCard(): Log-Datei nicht mehr erreichbar -- Karte vermutlich entfernt.");
     SD.end();
     sdSpi.end();
     sdMounted = false;
@@ -641,7 +762,7 @@ void checkSdCard() {
 
   sdSpi.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
   bool ok = SD.begin(PIN_SD_CS, sdSpi, 80000000);
-  Serial.printf("checkSdCard(): SD.begin() -> %s\n", ok ? "true" : "false");
+  logMsg("checkSdCard(): SD.begin() -> %s\n", ok ? "true" : "false");
 
   if (!ok) {
     if (!sdCheckedOnce) {
@@ -664,7 +785,7 @@ void checkSdCard() {
   snprintf(sdStatusMsg, sizeof(sdStatusMsg), "SD-Karte: erkannt (%s, %llu MB)",
            typeStr, SD.cardSize() / (1024ULL * 1024ULL));
   sdStatusColor = TFT_GREENYELLOW;
-  Serial.printf("checkSdCard(): Zustandswechsel -> gemountet, %s\n", sdStatusMsg);
+  logMsg("checkSdCard(): Zustandswechsel -> gemountet, %s\n", sdStatusMsg);
   logSessionStart();
   buzzerBeep(80);
   updateSdInfo();
@@ -678,14 +799,14 @@ bool pn532Begin() {
   if (!versiondata) {
     snprintf(pn532StatusMsg, sizeof(pn532StatusMsg), "PN532: nicht gefunden (Verkabelung/DIP pruefen)");
     pn532StatusColor = TFT_RED;
-    Serial.println("pn532Begin(): getFirmwareVersion() -> 0 (nicht gefunden)");
+    logMsg("pn532Begin(): getFirmwareVersion() -> 0 (nicht gefunden)");
     return false;
   }
   snprintf(pn532StatusMsg, sizeof(pn532StatusMsg), "PN532: PN5%02X gefunden, Firmware %d.%d",
            (unsigned)((versiondata >> 24) & 0xFF), (unsigned)((versiondata >> 16) & 0xFF),
            (unsigned)((versiondata >> 8) & 0xFF));
   pn532StatusColor = TFT_GREENYELLOW;
-  Serial.printf("pn532Begin(): %s\n", pn532StatusMsg);
+  logMsg("pn532Begin(): %s\n", pn532StatusMsg);
   nfc.SAMConfig();
   // Ohne das wuerde der PN532-CHIP SELBST (nicht die Bibliothek) bei
   // inListPassiveTarget() intern unbegrenzt oft nach einer Karte suchen,
@@ -725,7 +846,7 @@ void desfireDeepRead() {
       formatTimestamp(ts, sizeof(ts));
       log.printf("=== DESFire-Lesevorgang %s ===\n", ts);
     } else {
-      Serial.println("desfireDeepRead(): SD.open() fehlgeschlagen, logge nur nach Serial.");
+      logMsg("desfireDeepRead(): SD.open() fehlgeschlagen, logge nur nach Serial.");
     }
   }
 
@@ -879,16 +1000,16 @@ void desfireOpSetMasterKey() {
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (usedCustom) {
-        Serial.println("desfireOpSetMasterKey(): PICC-Key ist bereits der Custom-Key.");
+        logMsg("desfireOpSetMasterKey(): PICC-Key ist bereits der Custom-Key.");
         anyOk = true;
       } else if (desfireChangeKeySame(0, CUSTOM_KEY, sessionKey, iv, isAes)) {
-        Serial.println("desfireOpSetMasterKey(): PICC-Master-Key gesetzt.");
+        logMsg("desfireOpSetMasterKey(): PICC-Master-Key gesetzt.");
         anyOk = true;
       } else {
-        Serial.println("desfireOpSetMasterKey(): ChangeKey auf PICC-Ebene fehlgeschlagen.");
+        logMsg("desfireOpSetMasterKey(): ChangeKey auf PICC-Ebene fehlgeschlagen.");
       }
     } else {
-      Serial.println("desfireOpSetMasterKey(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+      logMsg("desfireOpSetMasterKey(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
     }
   }
 
@@ -897,16 +1018,16 @@ void desfireOpSetMasterKey() {
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (usedCustom) {
-        Serial.println("desfireOpSetMasterKey(): App-Key ist bereits der Custom-Key.");
+        logMsg("desfireOpSetMasterKey(): App-Key ist bereits der Custom-Key.");
         anyOk = true;
       } else if (desfireChangeKeySame(0, CUSTOM_KEY, sessionKey, iv, isAes)) {
-        Serial.println("desfireOpSetMasterKey(): App-Key gesetzt.");
+        logMsg("desfireOpSetMasterKey(): App-Key gesetzt.");
         anyOk = true;
       } else {
-        Serial.println("desfireOpSetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
+        logMsg("desfireOpSetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
       }
     } else {
-      Serial.println("desfireOpSetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. noch nicht angelegt).");
+      logMsg("desfireOpSetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. noch nicht angelegt).");
     }
   }
 
@@ -929,16 +1050,16 @@ void desfireOpResetMasterKey() {
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (!usedCustom) {
-        Serial.println("desfireOpResetMasterKey(): PICC-Key ist bereits Standard.");
+        logMsg("desfireOpResetMasterKey(): PICC-Key ist bereits Standard.");
         anyOk = true;
       } else if (desfireChangeKeySame(0, zeroKey, sessionKey, iv, isAes)) {
-        Serial.println("desfireOpResetMasterKey(): PICC-Master-Key zurueckgesetzt.");
+        logMsg("desfireOpResetMasterKey(): PICC-Master-Key zurueckgesetzt.");
         anyOk = true;
       } else {
-        Serial.println("desfireOpResetMasterKey(): ChangeKey auf PICC-Ebene fehlgeschlagen.");
+        logMsg("desfireOpResetMasterKey(): ChangeKey auf PICC-Ebene fehlgeschlagen.");
       }
     } else {
-      Serial.println("desfireOpResetMasterKey(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+      logMsg("desfireOpResetMasterKey(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
     }
   }
 
@@ -947,16 +1068,16 @@ void desfireOpResetMasterKey() {
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (!usedCustom) {
-        Serial.println("desfireOpResetMasterKey(): App-Key ist bereits Standard.");
+        logMsg("desfireOpResetMasterKey(): App-Key ist bereits Standard.");
         anyOk = true;
       } else if (desfireChangeKeySame(0, zeroKey, sessionKey, iv, isAes)) {
-        Serial.println("desfireOpResetMasterKey(): App-Key zurueckgesetzt.");
+        logMsg("desfireOpResetMasterKey(): App-Key zurueckgesetzt.");
         anyOk = true;
       } else {
-        Serial.println("desfireOpResetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
+        logMsg("desfireOpResetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
       }
     } else {
-      Serial.println("desfireOpResetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpResetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. nicht vorhanden).");
     }
   }
 
@@ -985,14 +1106,14 @@ void desfireOpCreateApp() {
           if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey2, iv2, &cipherName2, &isAes2, &usedCustom2)) {
             ok = desfireCreateValueFile(VALUE_FILE_NO, VALUE_LOWER_LIMIT, VALUE_UPPER_LIMIT, 0);
           } else {
-            Serial.println("desfireOpCreateApp(): Auth in neuer App fehlgeschlagen.");
+            logMsg("desfireOpCreateApp(): Auth in neuer App fehlgeschlagen.");
           }
         }
       } else {
-        Serial.println("desfireOpCreateApp(): CreateApplication fehlgeschlagen (existiert sie schon?).");
+        logMsg("desfireOpCreateApp(): CreateApplication fehlgeschlagen (existiert sie schon?).");
       }
     } else {
-      Serial.println("desfireOpCreateApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+      logMsg("desfireOpCreateApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
     }
   }
 
@@ -1013,7 +1134,7 @@ void desfireOpDeleteApp() {
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireDeleteApplication(CUSTOM_AID);
     } else {
-      Serial.println("desfireOpDeleteApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+      logMsg("desfireOpDeleteApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
     }
   }
 
@@ -1034,7 +1155,7 @@ void desfireOpCredit() {
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireCredit(VALUE_FILE_NO, CREDIT_DEBIT_AMOUNT) && desfireCommitTransaction();
     } else {
-      Serial.println("desfireOpCredit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpCredit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
     }
   }
 
@@ -1062,7 +1183,7 @@ void desfireOpDebit() {
         debitRejected = true;
       }
     } else {
-      Serial.println("desfireOpDebit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpDebit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
     }
   }
 
@@ -1085,7 +1206,7 @@ void desfireOpGetValue() {
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireGetValue(VALUE_FILE_NO, value);
     } else {
-      Serial.println("desfireOpGetValue(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpGetValue(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
     }
   }
 
@@ -1141,7 +1262,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 bool syncFromNtp() {
   bool haveSerial = (bool)Serial;
   if (WiFi.status() != WL_CONNECTED) {
-    if (haveSerial) Serial.println("syncFromNtp(): WLAN nicht verbunden -- erst WLAN/ESP-NOW-Button auf WLAN stellen.");
+    if (haveSerial) logMsg("syncFromNtp(): WLAN nicht verbunden -- erst WLAN/ESP-NOW-Button auf WLAN stellen.");
     return false;
   }
 
@@ -1150,7 +1271,7 @@ bool syncFromNtp() {
 
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo, 10000)) {
-    if (haveSerial) Serial.println("NTP-Sync fehlgeschlagen (Timeout -- Server nicht erreichbar?).");
+    if (haveSerial) logMsg("NTP-Sync fehlgeschlagen (Timeout -- Server nicht erreichbar?).");
     return false;
   }
 
@@ -1165,10 +1286,10 @@ bool syncFromNtp() {
   dt.voltageLow = false;
 
   if (rtcWrite(dt)) {
-    if (haveSerial) Serial.println("RTC per NTP synchronisiert.");
+    if (haveSerial) logMsg("RTC per NTP synchronisiert.");
     return true;
   }
-  if (haveSerial) Serial.println("FEHLER: RTC-Schreibzugriff nach NTP-Sync fehlgeschlagen.");
+  if (haveSerial) logMsg("FEHLER: RTC-Schreibzugriff nach NTP-Sync fehlgeschlagen.");
   return false;
 }
 #endif
@@ -1180,7 +1301,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(200);
-  Serial.println("Stage 5: PN532 NFC + SD + RTC + WLAN/ESP-NOW -- boot");
+  logMsg("Stage 5: PN532 NFC + SD + RTC + WLAN/ESP-NOW -- boot");
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
   delay(50);
@@ -1192,11 +1313,11 @@ void setup() {
 
   uint8_t gtAddr = probeGT911Address();
   touchStandaloneConfig(gtAddr);
-  Serial.printf("Touch-Init -> %s\n", touchStandaloneInit() ? "OK" : "FEHLGESCHLAGEN");
+  logMsg("Touch-Init -> %s\n", touchStandaloneInit() ? "OK" : "FEHLGESCHLAGEN");
 
-  Serial.println("rgbPanelInit() (esp_lcd_panel_rgb, mit Bounce Buffer) ...");
+  logMsg("rgbPanelInit() (esp_lcd_panel_rgb, mit Bounce Buffer) ...");
   if (!rgbPanelInit()) {
-    Serial.println("Panel-Init fehlgeschlagen -- Sketch haelt an.");
+    logMsg("Panel-Init fehlgeschlagen -- Sketch haelt an.");
     while (true) { delay(1000); }
   }
   canvas.setColorDepth(16);
@@ -1222,7 +1343,7 @@ void setup() {
   }
 
   if (esp_now_init() != ESP_OK) {
-    Serial.println("FEHLER: esp_now_init() fehlgeschlagen");
+    logMsg("FEHLER: esp_now_init() fehlgeschlagen");
   }
   esp_now_register_send_cb(onDataSent);
   esp_now_register_recv_cb(onDataRecv);
@@ -1232,7 +1353,7 @@ void setup() {
   peerInfo.channel = 0;   // aktueller WiFi-Kanal
   peerInfo.encrypt = false;
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("FEHLER: esp_now_add_peer() fehlgeschlagen");
+    logMsg("FEHLER: esp_now_add_peer() fehlgeschlagen");
   }
 
   outgoing.counter = 0;
@@ -1240,7 +1361,7 @@ void setup() {
 
   RtcDateTime dt;
   if (rtcRead(dt) && dt.voltageLow) {
-    Serial.println("Hinweis: VL-Bit gesetzt -- Zeit nach Spannungsausfall unsicher, bitte stellen.");
+    logMsg("Hinweis: VL-Bit gesetzt -- Zeit nach Spannungsausfall unsicher, bitte stellen.");
   }
 
   checkSdCard();
@@ -1249,15 +1370,9 @@ void setup() {
     buzzerBeep(300);
   }
 
-  drawStaticParts();
-  updateSdInfo();
-  updateRtcInfo();
-  updatePn532Info();
-  updateSendInfo();
-  updateReceivedInfo();
-  updateUidInfo();
-  updateWifiInfo();
-  Serial.println("Setup fertig.");
+  redrawMainScreen();
+  displayReady = true;
+  logMsg("Setup fertig.");
 }
 
 uint32_t lastRtcDrawMs = 0;
@@ -1277,7 +1392,7 @@ void loop() {
   // dass ein Tastendruck-Ergebnis fast sofort wieder ueberschrieben
   // wurde -- mit eigenem Fenster ist das jetzt strukturell ausgeschlossen,
   // nicht mehr nur durch eine Wartezeit kaschiert.
-  if (desfireModalState == MODAL_CLOSED) {
+  if (desfireModalState == MODAL_CLOSED && !settingsOpen) {
     // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/geloggt -- siehe
     // Kommentar bei recvPending oben.
     if (recvPending) {
@@ -1347,18 +1462,25 @@ void loop() {
 
   int32_t x, y;
   if (touchStandaloneGetXY(&x, &y)) {
-    int32_t rawXDbg = x, rawYDbg = y;
+    // Rotations-Debug-Ausgabe (roh vs. gedreht) entfernt -- Rotation ist
+    // an echter Hardware bestaetigt korrekt (siehe Fotos), und die Zeile
+    // haette bei jedem Touch-Poll das neue Log-Panel geflutet.
     rotateTouchToLogical(x, y);
-    // Diagnose-Ausgabe fuer die Rotations-Transformation -- NUR wenn
-    // tatsaechlich ein Serial Monitor verbunden ist (Serial ist bei
-    // ESP32-S3-USB-CDC ein bool-Operator dafuer). Ohne diese Absicherung
-    // blockiert Serial.printf() hier bei jedem einzelnen Touch-Poll, sobald
-    // der CDC-Sendepuffer vollgelaufen ist und niemand ihn ausliest --
-    // fuehlte sich wie extrem traege reagierende Buttons an (siehe
-    // Hardware-Test), weil loop() bei gehaltenem Finger staendig hier
-    // haengen blieb.
-    if (Serial) {
-      Serial.printf("Touch: roh=(%d,%d) -> gedreht=(%d,%d)\n", rawXDbg, rawYDbg, x, y);
+
+    // Log-Panel-Scrollen ist IMMER erreichbar, unabhaengig davon, ob
+    // gerade das DESFire-Fenster oder die Einstellungen offen sind (siehe
+    // Kommentar bei LOG_PANEL_Y oben -- soll live mitlesbar bleiben).
+    if (inside(btnLogUp, x, y)) {
+      int maxOffset = logCount > LOG_VISIBLE_LINES ? logCount - LOG_VISIBLE_LINES : 0;
+      if (logScrollOffset < maxOffset) logScrollOffset++;
+      drawLogPanel();
+      delay(150);
+      return;
+    } else if (inside(btnLogDown, x, y)) {
+      if (logScrollOffset > 0) logScrollOffset--;
+      drawLogPanel();
+      delay(150);
+      return;
     }
 
     // Solange das DESFire-Aktions-Fenster offen ist, werden AUSSCHLIESSLICH
@@ -1387,52 +1509,66 @@ void loop() {
       return;
     }
 
-    if (inside(btnNtpSync, x, y)) {
-      drawButton(btnNtpSync, TFT_GREEN);
-      bool ntpOk = false;
+    // EINSTELLUNGEN-Untermenue: eigene Buttons, kein Bestaetigungsschritt
+    // (siehe Deklaration von settingsOpen oben).
+    if (settingsOpen) {
+      if (inside(btnSettingsNtpSync, x, y)) {
+        drawButton(btnSettingsNtpSync, TFT_GREEN);
+        bool ntpOk = false;
 #ifdef USE_WIFI_NTP_SYNC
-      ntpOk = syncFromNtp();
-      updateRtcInfo();
+        ntpOk = syncFromNtp();
+        updateRtcInfo();
 #else
-      Serial.println("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
+        logMsg("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
 #endif
-      buzzerBeep(80);
-      // Sichtbare Rueckmeldung statt nur Serial: rot kurz aufleuchten bei
-      // Fehlschlag/deaktiviert, sonst direkt zurueck auf grau.
-      drawButton(btnNtpSync, ntpOk ? TFT_DARKGREY : TFT_RED);
-      if (!ntpOk) {
-        delay(500);
-        drawButton(btnNtpSync, TFT_DARKGREY);
-      }
-    } else if (inside(btnWifiToggle, x, y)) {
-      drawButton(btnWifiToggle, TFT_GREEN);
+        buzzerBeep(80);
+        drawButton(btnSettingsNtpSync, ntpOk ? TFT_DARKGREY : TFT_RED);
+        if (!ntpOk) {
+          delay(500);
+          drawButton(btnSettingsNtpSync, TFT_DARKGREY);
+        }
+      } else if (inside(btnSettingsWifiToggle, x, y)) {
+        drawButton(btnSettingsWifiToggle, TFT_GREEN);
 #ifdef USE_WIFI_NTP_SYNC
-      wlanModeActive = !wlanModeActive;
-      if (wlanModeActive) {
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-        Serial.println("WLAN-Modus aktiviert -- verbinde fuer NTP (siehe WLAN-IP-Zeile) ...");
-      } else {
-        WiFi.disconnect();
-        Serial.println("ESP-NOW-Modus aktiviert -- WLAN-Verbindung getrennt.");
-      }
-      updateWifiInfo();
+        wlanModeActive = !wlanModeActive;
+        if (wlanModeActive) {
+          WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+          logMsg("WLAN-Modus aktiviert -- verbinde fuer NTP (siehe WLAN-IP-Zeile) ...");
+        } else {
+          WiFi.disconnect();
+          logMsg("ESP-NOW-Modus aktiviert -- WLAN-Verbindung getrennt.");
+        }
+        updateWifiInfo();
 #else
-      Serial.println("WLAN/ESP-NOW-Umschaltung deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren.");
+        logMsg("WLAN/ESP-NOW-Umschaltung deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren.");
 #endif
+        buzzerBeep(80);
+        drawButton(btnSettingsWifiToggle, TFT_DARKGREY);
+      } else if (inside(btnSettingsBrightUp, x, y)) {
+        backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
+        setBacklightPercent(backlightPercent);
+        drawButton(btnSettingsBrightUp, TFT_GREEN);
+        delay(80);
+        drawButton(btnSettingsBrightUp, TFT_DARKGREY);
+      } else if (inside(btnSettingsBrightDn, x, y)) {
+        backlightPercent = (backlightPercent >= 10) ? backlightPercent - 10 : 0;
+        setBacklightPercent(backlightPercent);
+        drawButton(btnSettingsBrightDn, TFT_GREEN);
+        delay(80);
+        drawButton(btnSettingsBrightDn, TFT_DARKGREY);
+      } else if (inside(btnModalClose, x, y)) {
+        buzzerBeep(80);
+        settingsOpen = false;
+        redrawMainScreen();
+      }
+      delay(150);
+      return;
+    }
+
+    if (inside(btnSettingsOpen, x, y)) {
       buzzerBeep(80);
-      drawButton(btnWifiToggle, TFT_DARKGREY);
-    } else if (inside(btnBrightUp, x, y)) {
-      backlightPercent = (backlightPercent <= 90) ? backlightPercent + 10 : 100;
-      setBacklightPercent(backlightPercent);
-      drawButton(btnBrightUp, TFT_GREEN);
-      delay(80);
-      drawButton(btnBrightUp, TFT_DARKGREY);
-    } else if (inside(btnBrightDn, x, y)) {
-      backlightPercent = (backlightPercent >= 10) ? backlightPercent - 10 : 0;
-      setBacklightPercent(backlightPercent);
-      drawButton(btnBrightDn, TFT_GREEN);
-      delay(80);
-      drawButton(btnBrightDn, TFT_DARKGREY);
+      settingsOpen = true;
+      drawSettingsMenu();
     } else if (inside(btnSetMasterKey, x, y)) {
       buzzerBeep(80);
       desfireModalAction = DESFIRE_ACTION_SET_MASTER_KEY;

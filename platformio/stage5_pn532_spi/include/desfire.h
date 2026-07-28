@@ -133,7 +133,7 @@ inline bool desfireGetVersion(DesfireVersion &v) {
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0x60, nullptr, 0, buf, &len, sizeof(buf));
   if (status != 0x00 || len < 28) {
-    Serial.printf("desfireGetVersion(): %s (status=0x%02X, len=%u)\n", desfireStatusName(status), status, len);
+    logMsg("desfireGetVersion(): %s (status=0x%02X, len=%u)\n", desfireStatusName(status), status, len);
     return false;
   }
   v.hwVendorId = buf[0]; v.hwType = buf[1]; v.hwSubType = buf[2];
@@ -152,7 +152,7 @@ inline uint8_t desfireGetApplicationIDs(uint8_t aids[][3], uint8_t maxApps) {
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0x6A, nullptr, 0, buf, &len, sizeof(buf));
   if (status != 0x00) {
-    Serial.printf("desfireGetApplicationIDs(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireGetApplicationIDs(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return 0;
   }
   uint8_t count = len / 3;
@@ -166,7 +166,7 @@ inline bool desfireSelectApplication(const uint8_t aid[3]) {
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0x5A, aid, 3, buf, &len, sizeof(buf));
   if (status != 0x00) {
-    Serial.printf("desfireSelectApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireSelectApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
   }
   return status == 0x00;
 }
@@ -176,7 +176,7 @@ inline uint8_t desfireGetFileIDs(uint8_t fileIds[], uint8_t maxFiles) {
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0x6F, nullptr, 0, buf, &len, sizeof(buf));
   if (status != 0x00) {
-    Serial.printf("desfireGetFileIDs(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireGetFileIDs(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return 0;
   }
   uint8_t count = len;
@@ -190,7 +190,7 @@ inline bool desfireGetFileSettings(uint8_t fileId, DesfireFileSettings &out) {
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0xF5, &fileId, 1, buf, &len, sizeof(buf));
   if (status != 0x00 || len < 1) {
-    Serial.printf("desfireGetFileSettings(file %u): %s (status=0x%02X)\n", fileId, desfireStatusName(status), status);
+    logMsg("desfireGetFileSettings(file %u): %s (status=0x%02X)\n", fileId, desfireStatusName(status), status);
     return false;
   }
   out.fileType = buf[0];
@@ -209,7 +209,7 @@ inline uint16_t desfireReadData(uint8_t fileId, uint8_t *outBuf, uint16_t outBuf
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0xBD, params, 7, outBuf, &len, outBufCap);
   if (status != 0x00) {
-    Serial.printf("desfireReadData(file %u): %s (status=0x%02X)\n", fileId, desfireStatusName(status), status);
+    logMsg("desfireReadData(file %u): %s (status=0x%02X)\n", fileId, desfireStatusName(status), status);
     return 0;
   }
   return len;
@@ -224,7 +224,7 @@ inline uint16_t desfireReadRecords(uint8_t fileId, uint8_t *outBuf, uint16_t out
   uint16_t len = 0;
   uint8_t status = desfireTransceive(0xBB, params, 7, outBuf, &len, outBufCap);
   if (status != 0x00) {
-    Serial.printf("desfireReadRecords(file %u): %s (status=0x%02X)\n", fileId, desfireStatusName(status), status);
+    logMsg("desfireReadRecords(file %u): %s (status=0x%02X)\n", fileId, desfireStatusName(status), status);
     return 0;
   }
   return len;
@@ -506,7 +506,7 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
   uint8_t resp[32];
   uint8_t respLen = sizeof(resp);
   if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 9 || resp[0] != 0xAF) {
-    Serial.printf("desfireAuthDes3: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
+    logMsg("desfireAuthDes3: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
                   respLen > 0 ? resp[0] : 0xFF, respLen);
     return false;
   }
@@ -536,7 +536,7 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
   memcpy(send2 + 1, encAB, 16);
   respLen = sizeof(resp);
   if (!nfc.inDataExchange(send2, 17, resp, &respLen) || respLen < 9 || resp[0] != 0x00) {
-    Serial.printf("desfireAuthDes3: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
+    logMsg("desfireAuthDes3: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
                   "vermutlich falscher Schluessel oder Karte hat Werksschluessel nicht mehr.\n",
                   respLen > 0 ? resp[0] : 0xFF, respLen);
     return false;
@@ -552,7 +552,7 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
   desfireRotateLeft1(rndAExpectedRot, 8);
 
   if (memcmp(rndARot, rndAExpectedRot, 8) != 0) {
-    Serial.println("desfireAuthDes3: RndA-Rueckpruefung fehlgeschlagen (falscher Schluessel?).");
+    logMsg("desfireAuthDes3: RndA-Rueckpruefung fehlgeschlagen (falscher Schluessel?).");
     return false;
   }
 
@@ -574,7 +574,7 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
   uint8_t resp[40];
   uint8_t respLen = sizeof(resp);
   if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 17 || resp[0] != 0xAF) {
-    Serial.printf("desfireAuthAes: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
+    logMsg("desfireAuthAes: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
                   respLen > 0 ? resp[0] : 0xFF, respLen);
     return false;
   }
@@ -604,7 +604,7 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
   memcpy(send2 + 1, encAB, 32);
   respLen = sizeof(resp);
   if (!nfc.inDataExchange(send2, 33, resp, &respLen) || respLen < 17 || resp[0] != 0x00) {
-    Serial.printf("desfireAuthAes: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
+    logMsg("desfireAuthAes: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
                   "vermutlich falscher Schluessel oder Karte hat Werksschluessel nicht mehr.\n",
                   respLen > 0 ? resp[0] : 0xFF, respLen);
     return false;
@@ -620,7 +620,7 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
   desfireRotateLeft1(rndAExpectedRot, 16);
 
   if (memcmp(rndARot, rndAExpectedRot, 16) != 0) {
-    Serial.println("desfireAuthAes: RndA-Rueckpruefung fehlgeschlagen (falscher Schluessel?).");
+    logMsg("desfireAuthAes: RndA-Rueckpruefung fehlgeschlagen (falscher Schluessel?).");
     return false;
   }
 
@@ -759,7 +759,7 @@ inline bool desfireChangeKeySame(uint8_t keyNo, const uint8_t newKey16[16],
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0xC4, params, 1 + totalLen, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireChangeKeySame(key %u): %s (status=0x%02X)\n", keyNo, desfireStatusName(status), status);
+    logMsg("desfireChangeKeySame(key %u): %s (status=0x%02X)\n", keyNo, desfireStatusName(status), status);
     return false;
   }
   return true;
@@ -780,7 +780,7 @@ inline bool desfireCreateApplication(const uint8_t aid[3], bool aesKeys) {
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0xCA, params, 5, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireCreateApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireCreateApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return false;
   }
   return true;
@@ -793,7 +793,7 @@ inline bool desfireDeleteApplication(const uint8_t aid[3]) {
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0xDA, aid, 3, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireDeleteApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireDeleteApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return false;
   }
   return true;
@@ -820,7 +820,7 @@ inline bool desfireCreateValueFile(uint8_t fileNo, int32_t lowerLimit, int32_t u
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0xCC, params, 17, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireCreateValueFile(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireCreateValueFile(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return false;
   }
   return true;
@@ -834,7 +834,7 @@ inline bool desfireCredit(uint8_t fileNo, int32_t amount) {
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0x0C, params, 5, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireCredit(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireCredit(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return false;
   }
   return true;
@@ -852,7 +852,7 @@ inline bool desfireDebit(uint8_t fileNo, int32_t amount) {
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0xDC, params, 5, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireDebit(): %s (status=0x%02X) -- vermutlich zu wenig Guthaben, falls BOUNDARY_ERROR.\n",
+    logMsg("desfireDebit(): %s (status=0x%02X) -- vermutlich zu wenig Guthaben, falls BOUNDARY_ERROR.\n",
                   desfireStatusName(status), status);
     return false;
   }
@@ -864,7 +864,7 @@ inline bool desfireGetValue(uint8_t fileNo, int32_t &valueOut) {
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0x6C, &fileNo, 1, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00 || respLen < 4) {
-    Serial.printf("desfireGetValue(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireGetValue(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return false;
   }
   valueOut = desfireGetLE32(respBuf);
@@ -879,7 +879,7 @@ inline bool desfireCommitTransaction() {
   uint16_t respLen = 0;
   uint8_t status = desfireTransceive(0xC7, nullptr, 0, respBuf, &respLen, sizeof(respBuf));
   if (status != 0x00) {
-    Serial.printf("desfireCommitTransaction(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    logMsg("desfireCommitTransaction(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return false;
   }
   return true;
