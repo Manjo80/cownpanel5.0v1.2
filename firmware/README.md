@@ -523,6 +523,25 @@ Umschalter und BACKLIGHT +/- sind aus dem Hauptbildschirm in ein
 Bestätigungsschritt — diese vier Aktionen sind unkritisch und sofort
 rückgängig machbar, anders als die DESFire-Schreibkommandos.
 
+**Bugfix: lange Log-Zeilen liefen mit der nächsten Zeile ineinander.**
+`drawLogView()` zeichnete ursprünglich jeden Log-Eintrag mit `canvas.print()`
+an eine feste Y-Position (`LOGVIEW_LINE_H` = 16px pro Eintrag), unabhängig
+davon, ob LovyanGFX den Text intern über mehrere Bildschirmzeilen umbrach —
+Einträge nahe der 72-Zeichen-Obergrenze (`LOG_LINE_LEN`) sind bei
+`textSize(1.5)` im 440px breiten Textbereich fast immer zweizeilig, die
+zweite Zeile überschrieb dann den nächsten Eintrag (an echter Hardware
+sichtbar geworden). **Fix:** `drawLogView()` nutzt jetzt denselben
+`printWrapped()`-Zeilenumbruch-Helfer wie das DESFire-Aktions-Fenster, misst
+die tatsächlich benötigte Zeilenzahl pro Eintrag und rückt den Cursor
+entsprechend weiter — die Zahl der pro Bildschirm sichtbaren Einträge
+variiert dadurch (kürzere Meldungen passen mehr rein), `HOCH`/`RUNTER`
+bleiben aber weiterhin pro **Eintrag** (nicht pro Bildschirmzeile). Da
+`printWrapped()` dadurch schon vor seiner eigentlichen Definition
+gebraucht wird, gibt es dafür — wie bei `drawLogView()`/`logToSd()` selbst
+— eine Vorwärtsdeklaration ganz am Anfang der Datei (PlatformIOs
+`main.cpp` hat keine automatische Prototyp-Generierung wie die Arduino
+IDE, siehe Abschnitt 7).
+
 ## 12. Erste echte Hardware-Diagnose: Auth erreicht Status 0x00, RndA-Prüfung schlägt trotzdem fehl
 
 Erstes reales SD-Log von echter Hardware (`MASTER-PW SETZEN`) zeigte:

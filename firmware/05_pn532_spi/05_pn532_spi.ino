@@ -98,6 +98,11 @@ bool displayReady = false;
 bool logViewOpen = false;
 void drawLogView();
 void logToSd(const char *line);
+// drawLogView() (s.u.) braucht printWrapped() fuers Zeilenumbruch-Layout,
+// dessen eigentlicher Funktionskoerper aber (wegen canvas.textWidth())
+// selbst erst weiter unten folgt -- ohne diese Vorwaertsdeklaration baut
+// PlatformIO's main.cpp nicht (siehe Kommentar oben zu drawLogView()).
+int printWrapped(const char *text, int x, int y, int maxWidthPx, int lineHeight);
 
 inline void logAdd(const char *line) {
   strncpy(logBuffer[logHead], line, LOG_LINE_LEN - 1);
@@ -162,7 +167,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.4";
+const char *FIRMWARE_VERSION = "2026-07-28.5";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -615,13 +620,23 @@ void drawLogView() {
   canvas.setTextSize(1.5);
   canvas.setTextColor(TFT_GREENYELLOW);
   int textTop = LOGVIEW_Y + LOGVIEW_HEADER_H;
+  int textBottom = LOGVIEW_Y + LOGVIEW_H - LOGVIEW_FOOTER_H;
+  int textMaxWidth = LOGVIEW_W - 24; // 12px Rand links + rechts
   int endIdx = logCount - logScrollOffset; // exklusiv
+  // LOGVIEW_VISIBLE_LINES ist hier nur eine OBERE Grenze fuers Fenster
+  // (jeder Eintrag mind. 1 Zeile) -- tatsaechlich gezeichnet wird unten
+  // ueber printWrapped() mit variabler Zeilenzahl pro Eintrag, damit lange
+  // Meldungen (bis zu LOG_LINE_LEN=72 Zeichen) nicht mit der naechsten
+  // Meldung ineinanderlaufen, wie es beim vorherigen fixen
+  // LOGVIEW_LINE_H-pro-Eintrag-Layout passierte.
   int startIdx = endIdx - LOGVIEW_VISIBLE_LINES;
   if (startIdx < 0) startIdx = 0;
+  int yCursor = textTop;
   for (int i = startIdx; i < endIdx; i++) {
+    if (yCursor >= textBottom) break;
     int bufIdx = (logHead - logCount + i + LOG_LINES * 2) % LOG_LINES;
-    canvas.setCursor(LOGVIEW_X + 12, textTop + (i - startIdx) * LOGVIEW_LINE_H);
-    canvas.print(logBuffer[bufIdx]);
+    int linesUsed = printWrapped(logBuffer[bufIdx], LOGVIEW_X + 12, yCursor, textMaxWidth, LOGVIEW_LINE_H);
+    yCursor += linesUsed * LOGVIEW_LINE_H;
   }
 
   drawButton(btnLogViewUp, TFT_DARKGREY);
