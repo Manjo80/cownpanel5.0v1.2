@@ -196,7 +196,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.7";
+const char *FIRMWARE_VERSION = "2026-07-28.8";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -1644,7 +1644,7 @@ void loop() {
         ntpOk = syncFromNtp();
         updateRtcInfo();
 #else
-        logMsg("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
+        logMsg("NTP-Sync deaktiviert -- wifi_secrets.h fehlt (siehe wifi_secrets.example.h) oder es wurde seit dem Anlegen nicht neu kompiliert.");
 #endif
         buzzerBeep(80);
         drawButton(btnSettingsNtpSync, ntpOk ? TFT_DARKGREY : TFT_RED);
@@ -1672,7 +1672,7 @@ void loop() {
         }
         updateWifiInfo();
 #else
-        logMsg("WLAN/ESP-NOW-Umschaltung deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren.");
+        logMsg("WLAN/ESP-NOW-Umschaltung deaktiviert -- wifi_secrets.h fehlt (siehe wifi_secrets.example.h) oder es wurde seit dem Anlegen nicht neu kompiliert.");
 #endif
         buzzerBeep(80);
         drawButton(btnSettingsWifiToggle, TFT_DARKGREY);

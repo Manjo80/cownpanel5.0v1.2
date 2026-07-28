@@ -655,6 +655,61 @@ geloggt. Beim Setup wird zusätzlich jede registrierte SSID einzeln
 geloggt (vorher nur die Anzahl) — hilft zu prüfen, ob `wifi_secrets.h`
 korrekt eingelesen wurde.
 
+**Bugfix: veraltete Log-Meldung "USE_WIFI_NTP_SYNC einkommentieren".**
+Diese Meldung stammt noch aus der Zeit VOR dem `__has_include`-Fix (siehe
+oben) und beschrieb einen Mechanismus, der gar nicht mehr existiert — seit
+dem Fix entscheidet einzig und allein, ob `wifi_secrets.h` beim
+**Kompilieren** existiert, nichts wird mehr ein- oder auskommentiert.
+Beide Meldungen (NTP-SYNC-Button und WLAN/ESP-NOW-Umschalter) korrigiert:
+weisen jetzt korrekt darauf hin, dass entweder `wifi_secrets.h` fehlt
+(Vorlage: `wifi_secrets.example.h`) oder seit dem Anlegen nicht neu
+kompiliert wurde. **Wichtig:** Das ist ein reiner
+`#if __has_include(...)`-Compile-Zeit-Schalter — nur HOCHLADEN reicht
+nicht, es muss ein ECHTER Neu-Build sein (in der Arduino IDE reicht ein
+normaler Upload, der kompiliert automatisch neu; in PlatformIO im Zweifel
+"Clean" vor "Build/Upload", falls trotz vorhandener `wifi_secrets.h`
+weiterhin diese Meldung erscheint).
+
+**Nachtrag 3: Auch mit exaktem Text-Log (keine Foto-Abtippfehler mehr)
+weiterhin kein Treffer.** Ein sauberes, aus der SD-Textdatei kopiertes Log
+(alle 4 Kryptowerte pro Versuch: `EncRndB`, `RndB`, `RndA`, `EncAB[0:8]`,
+`EncAB[8:16]`, `EncRndAResp`, berechnetes/erwartetes `RndA'`) wurde
+vollständig gegen `pycryptodome` nachgerechnet. Beide Sanity-Checks
+bestanden (eigene `RndB`-Entschlüsselung und eigene `RndA'`-Berechnung
+reproduzierbar — die geloggten Werte UND die Übertragung sind also
+korrekt). Eine **erschöpfende** Suche über alle plausiblen IV-Kandidaten
+(`0`, `EncRndB`, `EncAB[0:8]`, `EncAB[8:16]`, `RndA`, `RndB`, rotiertes
+`RndB`) × beide XOR-Reihenfolgen (XOR-vor-Chiffre wie beim Legacy-
+Sende-Schritt / Chiffre-dann-XOR wie beim normalen CBC-Empfang) × alle
+plausiblen Zielwerte (`RndA` rotiert links/rechts/unrotiert, `RndB`
+rotiert/unrotiert) fand **keine einzige Kombination**, die zum tatsächlich
+erwarteten Wert passt — bei allen 3 unabhängigen Versuchen im Log.
+
+Das schließt praktisch jede denkbare simple IV-/Verkettungs-/
+Reihenfolge-Variante aus. Gleichzeitig spricht die Schrittfolge im Log
+GEGEN einen falschen Schlüssel: Status `0x00` in Schritt 2 (Karte
+akzeptiert das Kryptogramm) UND der sofortige `0xAE`-Fehlschlag von
+`desfireAuthAes` bereits in Schritt 1 (Karte lehnt Schlüssel 0 für den
+AES-Befehlstyp direkt ab, ohne ueberhaupt eine Challenge zu stellen —
+das bestätigt unabhängig, dass Schlüssel 0 tatsächlich als
+Legacy-2TDEA-Schlüssel konfiguriert ist, passend zu unserer Annahme).
+
+**Ehrlicher Stand:** Die Ursache liegt an dieser Stelle außerhalb dessen,
+was sich per Log-Analyse und Nachrechnen ohne echten Zugriff auf die
+Karten-Gegenseite weiter eingrenzen lässt. Denkbare Erklärungen, die sich
+von hier aus nicht mehr unterscheiden lassen: (a) eine PN532-/
+Adafruit-Bibliotheks-Eigenheit spezifisch für dieses rohe
+`inDataExchange()`-Antwort-Muster (Authenticate nutzt bewusst NICHT
+`desfireTransceive()`, siehe Kopfkommentar dort), (b) eine EV3-spezifische
+Abweichung vom in libfreefare (primär EV0/EV1) implementierten Ablauf, die
+über die bereits geprüfte Verschlüsselungs-vs-Entschlüsselungs-Eigenheit
+hinausgeht. **Empfehlung, falls weiter benötigt:** unabhängige
+Gegenprobe mit einem PC-seitigen Werkzeug (z. B. ein zweiter PN532/
+ACR122U an einem PC mit `libnfc`/`libfreefare`, oder ein Python-Skript mit
+`nfcpy`) gegen dieselbe physische Karte — das würde eindeutig trennen, ob
+das Problem im eigenen Code oder in einer Karten-/Chip-Eigenheit liegt,
+die keine reine Log-Analyse mehr aufdecken kann.
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele
