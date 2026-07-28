@@ -264,6 +264,19 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   Zusammenfassung) — die wird nach jedem NTP-SYNC-Versuch aktualisiert und
   zeigt an, ob `WiFi.begin()` überhaupt eine IP bekommen hat, auch wenn der
   anschließende NTP-Request selbst fehlschlägt.
+- **WLAN/NTP funktioniert trotz mehrfacher Fixes weiterhin nicht, auch mit
+  korrekt eingetragenen Zugangsdaten:** Der eigentliche Grund war banal —
+  `USE_WIFI_NTP_SYNC` musste bisher per `// #define USE_WIFI_NTP_SYNC` von
+  Hand in `05_pn532_spi.ino`/`main.cpp` einkommentiert werden. Diese Datei
+  ist aber versioniert; bei jedem `git pull` einer neuen Version wurde die
+  lokale Handänderung wieder auf "auskommentiert" zurückgesetzt, ohne dass
+  es auffiel — WLAN blieb dadurch nach jedem Update erneut deaktiviert.
+  **Fix:** `USE_WIFI_NTP_SYNC` wird jetzt automatisch gesetzt, sobald
+  `wifi_secrets.h` existiert (`#if __has_include("wifi_secrets.h")` statt
+  der manuellen `#define`-Zeile) — diese Datei ist git-ignored/lokal und
+  übersteht damit jeden Pull. Es reicht, sie einmal anzulegen (Kopie von
+  `wifi_secrets.example.h`, eigene Zugangsdaten eintragen); an der
+  versionierten `.ino`/`main.cpp` muss dafür nichts mehr geändert werden.
 - **Buttons reagieren erst nach 1-2 Sekunden gedrückt halten:** Der
   PN532-Poll ruft bei jedem 300-ms-Zyklus `nfc.inListPassiveTarget()` auf.
   Ohne Karte auf dem Leser sucht dabei **der PN532-Chip selbst** (nicht
@@ -402,6 +415,14 @@ Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
 | `VALUE_FILE_NO` | `0` | Einzige Datei in der App, ein Value File |
 | `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
 | `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
+
+**Wichtig für die Anzeige:** Der automatische Lese-Scan (Abschnitt 8)
+läuft weiter im Hintergrund und hätte das Ergebnis eines gerade gedrückten
+Buttons sofort mit seiner eigenen generischen Zusammenfassung
+überschrieben, bevor man es überhaupt lesen konnte — sichtbar war dann
+nur noch der Piepton, ohne erkennbaren Effekt. `desfireOpFinish()`
+(gemeinsamer Abschluss aller 7 Buttons) pausiert den Auto-Scan deshalb
+für `MANUAL_OP_DISPLAY_HOLD_MS` (4 Sekunden) nach jedem Tastendruck.
 
 **Buttons:**
 

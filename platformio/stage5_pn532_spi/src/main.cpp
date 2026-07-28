@@ -67,12 +67,19 @@
 #include "rtc_pcf8563.h"
 #include "desfire.h"
 
-// Fuer echten NTP-Abgleich einkommentieren und wifi_secrets.h anlegen
-// (Kopie von wifi_secrets.example.h in diesem Ordner, eigene Zugangsdaten
-// eintragen). Ohne das melden NTP-SYNC und der WLAN/ESP-NOW-Umschalter
-// "deaktiviert".
-// #define USE_WIFI_NTP_SYNC
-#ifdef USE_WIFI_NTP_SYNC
+// Fuer echten NTP-Abgleich wifi_secrets.h anlegen (Kopie von
+// wifi_secrets.example.h in diesem Ordner, eigene Zugangsdaten eintragen).
+// USE_WIFI_NTP_SYNC wird automatisch gesetzt, SOBALD diese Datei
+// existiert (__has_include statt einer manuell einzukommentierenden
+// #define-Zeile) -- git-ignored/lokal, bleibt also bei jedem "git pull"
+// erhalten. FRUEHER musste zusaetzlich "// #define USE_WIFI_NTP_SYNC" in
+// DIESER (versionierten) Datei von Hand einkommentiert werden -- das
+// wurde bei jedem Pull einer neuen Version wieder auf "auskommentiert"
+// zurueckgesetzt, ohne dass es auffiel. Genau DAS war vermutlich der
+// Grund, warum WLAN/NTP-SYNC trotz mehrfacher Fixes weiterhin nicht
+// funktionierte: die lokale Handaenderung ging bei jedem Update verloren.
+#if __has_include("wifi_secrets.h")
+#define USE_WIFI_NTP_SYNC
 #include <time.h>
 #include "wifi_secrets.h"
 #endif
@@ -175,6 +182,15 @@ const uint32_t RTC_UPDATE_INTERVAL_MS = 1000;
 const uint32_t SD_POLL_INTERVAL_MS = 2000;
 const uint32_t PN532_POLL_INTERVAL_MS = 300;
 const uint32_t PN532_DEBOUNCE_MS = 1000;
+// Solange < MANUAL_OP_DISPLAY_HOLD_MS seit dem letzten manuellen DESFire-
+// Button (siehe desfireOpFinish()) vergangen sind, pausiert der
+// automatische Lese-Scan komplett -- sonst ueberschrieb dessen naechster
+// Durchlauf (alle ~300ms+PN532_DEBOUNCE_MS) das gerade erst gesetzte
+// Ergebnis des Buttons fast sofort wieder mit der generischen
+// Lese-Zusammenfassung, ohne dass ueberhaupt sichtbar wurde, dass der
+// Button etwas bewirkt hat.
+const uint32_t MANUAL_OP_DISPLAY_HOLD_MS = 4000;
+uint32_t lastManualOpMs = 0;
 
 uint8_t broadcastAddr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -700,6 +716,19 @@ bool desfireOpBegin() {
   return true;
 }
 
+// Gemeinsamer Abschluss aller 7 Op-Funktionen: zeichnet das Ergebnis,
+// piept (kurz bei Erfolg, lang bei Fehlschlag) und -- WICHTIG -- haelt den
+// automatischen Lese-Scan fuer MANUAL_OP_DISPLAY_HOLD_MS an (siehe
+// Kommentar dort), damit das Ergebnis tatsaechlich sichtbar bleibt, statt
+// sofort vom naechsten Auto-Scan-Durchlauf ueberschrieben zu werden.
+void desfireOpFinish(bool ok) {
+  updateUidInfo();
+  buzzerBeep(ok ? 80 : 300);
+  uint32_t now = millis();
+  lastUidReadMs = now;
+  lastManualOpMs = now;
+}
+
 // "MASTER-PW SETZEN": authentifiziert mit dem AKTUELL gueltigen Schluessel
 // (Default ODER Custom, je nachdem was gerade gilt -- siehe
 // desfireAuthEitherKey()) und setzt Key 0 per ChangeKey auf CUSTOM_KEY.
@@ -750,8 +779,7 @@ void desfireOpSetMasterKey() {
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
            anyOk ? "Master-PW gesetzt (siehe Serial)" : "Master-PW setzen fehlgeschlagen (siehe Serial)");
-  updateUidInfo();
-  buzzerBeep(anyOk ? 80 : 300);
+  desfireOpFinish(anyOk);
 }
 
 // "AUF STANDARD": Kehrbild zu oben -- authentifiziert mit dem aktuellen
@@ -801,8 +829,7 @@ void desfireOpResetMasterKey() {
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
            anyOk ? "Auf Standard zurueckgesetzt (siehe Serial)" : "Zuruecksetzen fehlgeschlagen (siehe Serial)");
-  updateUidInfo();
-  buzzerBeep(anyOk ? 80 : 300);
+  desfireOpFinish(anyOk);
 }
 
 // "APP ERSTELLEN": PICC-Ebene auswaehlen+authentifizieren, CUSTOM_AID
@@ -838,8 +865,7 @@ void desfireOpCreateApp() {
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
            ok ? "Applikation erstellt (Guthaben 0)" : "Applikation erstellen fehlgeschlagen");
-  updateUidInfo();
-  buzzerBeep(ok ? 80 : 300);
+  desfireOpFinish(ok);
 }
 
 // "APP LOESCHEN": muss auf PICC-Ebene authentifiziert aufgerufen werden
@@ -860,8 +886,7 @@ void desfireOpDeleteApp() {
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
            ok ? "Applikation geloescht" : "Applikation loeschen fehlgeschlagen");
-  updateUidInfo();
-  buzzerBeep(ok ? 80 : 300);
+  desfireOpFinish(ok);
 }
 
 // "GUTHABEN BUCHEN": Credit + CommitTransaction (ohne Commit wird die
@@ -882,8 +907,7 @@ void desfireOpCredit() {
 
   if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben gebucht (+%ld)", (long)CREDIT_DEBIT_AMOUNT);
   else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben buchen fehlgeschlagen");
-  updateUidInfo();
-  buzzerBeep(ok ? 80 : 300);
+  desfireOpFinish(ok);
 }
 
 // "GUTHABEN NUTZEN": Debit + CommitTransaction. Die KARTE SELBST lehnt
@@ -912,8 +936,7 @@ void desfireOpDebit() {
   if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben genutzt (-%ld)", (long)CREDIT_DEBIT_AMOUNT);
   else if (debitRejected) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Zu wenig Guthaben (Debit abgelehnt)");
   else snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben nutzen fehlgeschlagen");
-  updateUidInfo();
-  buzzerBeep(ok ? 80 : 300);
+  desfireOpFinish(ok);
 }
 
 // "GUTHABEN ABFRAGEN": GetValue, Ergebnis landet direkt in der
@@ -935,8 +958,7 @@ void desfireOpGetValue() {
 
   if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben: %ld", (long)value);
   else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben abfragen fehlgeschlagen");
-  updateUidInfo();
-  buzzerBeep(ok ? 80 : 300);
+  desfireOpFinish(ok);
 }
 
 // Core-Versions-abhaengig (siehe README.md Abschnitt 15, Punkt 7).
@@ -1144,7 +1166,11 @@ void loop() {
   // nfc.setPassiveActivationRetries(1) in pn532Begin().
   if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
     lastPn532AttemptMs = now;
-    if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
+    // now - lastManualOpMs >= MANUAL_OP_DISPLAY_HOLD_MS: pausiert den
+    // Auto-Scan kurz nach einem manuellen DESFire-Button (siehe
+    // desfireOpFinish()), sonst ueberschreibt der naechste Auto-Scan-
+    // Durchlauf dessen Ergebnis fast sofort wieder.
+    if (now - lastUidReadMs >= PN532_DEBOUNCE_MS && now - lastManualOpMs >= MANUAL_OP_DISPLAY_HOLD_MS) {
       if (nfc.inListPassiveTarget()) {
         desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
         updateUidInfo();
