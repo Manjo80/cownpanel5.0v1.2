@@ -8,12 +8,20 @@
 //  - Unterstuetzt Legacy-2K3DES- (Kommando 0x0A) und AES-128- (Kommando
 //    0xAA) Authentifizierung mit einem 16-Byte-Schluessel (Default-Schluessel
 //    = 16 Nullbytes). KEIN 3K3DES, KEIN EV2-Secure-Messaging.
-//  - Session-Key wird aus RndA/RndB abgeleitet, aber NICHT fuer CMAC-
-//    Pruefung oder Enciphered-Kommunikation genutzt -- Dateien im
+//  - Session-Key wird aus RndA/RndB abgeleitet und NUR fuer ChangeKey
+//    genutzt (siehe desfireChangeKeySame()) -- KEIN CMAC, KEIN
+//    Enciphered-Datenverkehr fuer Lese-/Schreib-Dateizugriffe. Dateien im
 //    Enciphered-Modus werden ERKANNT, aber nicht entschluesselt (siehe
 //    desfireGetFileSettings()/commMode). MACed-Dateien werden gelesen,
 //    ihr MAC/CMAC wird NICHT geprueft (Daten selbst sind bei MACed-Modus
 //    ohnehin unverschluesselt uebertragen, nur zusaetzlich signiert).
+//    CreateValueFile() legt Value-Dateien deshalb immer im Plain-Modus an.
+//  - Schreibende Kommandos (ChangeKey, CreateApplication,
+//    DeleteApplication, CreateValueFile, Credit, Debit, CommitTransaction)
+//    sind implementiert, ABER: ChangeKey nur fuer den Fall "eigenen,
+//    gerade authentifizierten Schluessel aendern" (kein Schluesselwechsel
+//    fuer einen ANDEREN als den authentifizierten Key). Siehe
+//    Sicherheitshinweis bei desfireChangeKeySame().
 //  - Dieser Code wurde NICHT an echter DESFire-Hardware getestet (kein
 //    Testgeraet verfuegbar) -- er basiert auf der oeffentlich
 //    dokumentierten NXP-Spezifikation (ISO/IEC 9798-2 3-Pass-Mutual-
@@ -88,7 +96,11 @@ inline const char *desfireStatusName(uint8_t status) {
 inline uint8_t desfireTransceive(uint8_t cmd, const uint8_t *params, uint8_t paramsLen,
                                   uint8_t *outBuf, uint16_t *outLen, uint16_t outBufCap) {
   *outLen = 0;
-  uint8_t sendBuf[16];
+  // 40 statt vormals 16 Byte -- ChangeKey (0xC4) braucht bis zu 1 (Cmd) +
+  // 1 (KeyNo) + 32 (AES-Kryptogramm, aufgefuellt auf 2 AES-Bloecke) = 34
+  // Byte. PN532_PACKBUFFSIZ ist per Pflicht-Patch (siehe README.md) auf
+  // 255 erhoeht, das ist also nicht der begrenzende Faktor.
+  uint8_t sendBuf[40];
   sendBuf[0] = cmd;
   if (paramsLen > 0) memcpy(sendBuf + 1, params, paramsLen);
 
@@ -224,6 +236,55 @@ inline void desfireRotateLeft1(uint8_t *buf, size_t len) {
   uint8_t first = buf[0];
   memmove(buf, buf + 1, len - 1);
   buf[len - 1] = first;
+}
+
+// Schreibt einen int32_t LSB-zuerst (DESFire-Konvention fuer alle
+// Mehrbyte-Felder) -- explizit statt memcpy(), um nicht von der
+// Host-Byte-Ordnung abzuhaengen (auf ESP32-S3/Xtensa zwar ohnehin
+// Little-Endian, aber so bleibt es unabhaengig davon korrekt).
+inline void desfirePutLE32(uint8_t *dst, int32_t v) {
+  uint32_t u = (uint32_t)v;
+  dst[0] = (uint8_t)(u & 0xFF);
+  dst[1] = (uint8_t)((u >> 8) & 0xFF);
+  dst[2] = (uint8_t)((u >> 16) & 0xFF);
+  dst[3] = (uint8_t)((u >> 24) & 0xFF);
+}
+inline int32_t desfireGetLE32(const uint8_t *src) {
+  uint32_t u = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+  return (int32_t)u;
+}
+
+// CRC-A (ISO/IEC 14443-3) -- fuer ChangeKey-Kryptogramme mit Legacy-DES/
+// 2K3DES-Schluesseln. Poly 0x8408 (reflektierte Form von 0x1021), Init
+// 0x6363, kein finales XOR, Ergebnis wird LSB-zuerst angehaengt. Derselbe
+// Algorithmus, den PN532/PICCs ueberall in ISO14443A verwenden.
+inline uint16_t desfireCrc16(const uint8_t *data, size_t len) {
+  uint16_t crc = 0x6363;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; bit++) {
+      if (crc & 0x0001) crc = (crc >> 1) ^ 0x8408;
+      else crc = crc >> 1;
+    }
+  }
+  return crc;
+}
+
+// CRC-32 (DESFire-Variante) -- fuer ChangeKey-Kryptogramme mit AES-/
+// 3K3DES-Schluesseln. Poly 0xEDB88320 (reflektierte Form, wie beim
+// bekannten zlib/PKZIP-CRC32), Init 0xFFFFFFFF, ABER OHNE das bei
+// zlib uebliche finale XOR mit 0xFFFFFFFF -- DESFire laesst das weg.
+// Ergebnis wird LSB-zuerst angehaengt.
+inline uint32_t desfireCrc32(const uint8_t *data, size_t len) {
+  uint32_t crc = 0xFFFFFFFF;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; bit++) {
+      if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
+      else crc = crc >> 1;
+    }
+  }
+  return crc;
 }
 
 // ---------------------------------------------------------------------
@@ -431,9 +492,16 @@ inline void desfireAesCbc(const uint8_t key16[16], const uint8_t iv[16], bool en
 
 // Legacy-2K3DES-Authentifizierung (Kommando 0x0A), ISO/IEC-9798-2-3-Pass-
 // Mutual-Authentication. key16 = 16-Byte-Schluessel (Werks-Default:
-// 16 Nullbytes). sessionKeyOut wird bei Erfolg befuellt (hier ungenutzt,
-// da keine Secure-Messaging-Kommandos folgen -- siehe Datei-Kopfkommentar).
-inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16]) {
+// 16 Nullbytes). sessionKeyOut wird bei Erfolg befuellt. ivOut (falls
+// nicht nullptr) bekommt den LETZTEN in dieser Sitzung ausgetauschten
+// Chiffretext-Block (8 Byte) -- wird als IV fuer das naechste
+// verschluesselte Kommando in DERSELBEN Sitzung gebraucht (z. B.
+// ChangeKey direkt nach der Authentifizierung, siehe
+// desfireChangeKeySame()). Chiffretext-Chaining wird hier NICHT ueber
+// mehrere Kommandos hinweg verwaltet -- jeder Aufruf, der einen IV
+// braucht, bekommt ihn explizit uebergeben.
+inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16],
+                             uint8_t ivOut[8] = nullptr) {
   uint8_t send1[2] = { 0x0A, keyNo };
   uint8_t resp[32];
   uint8_t respLen = sizeof(resp);
@@ -493,12 +561,15 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
   memcpy(sessionKeyOut + 4, rndB, 4);
   memcpy(sessionKeyOut + 8, rndA + 4, 4);
   memcpy(sessionKeyOut + 12, rndB + 4, 4);
+  if (ivOut) memcpy(ivOut, encRndAResp, 8);
   return true;
 }
 
 // AES-128-Authentifizierung (Kommando 0xAA), gleiche Grundstruktur wie
 // desfireAuthDes3(), nur mit 16-Byte-Bloecken statt 8-Byte-Bloecken.
-inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16]) {
+// ivOut siehe Kommentar bei desfireAuthDes3() (hier 16 Byte statt 8).
+inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16],
+                            uint8_t ivOut[16] = nullptr) {
   uint8_t send1[2] = { 0xAA, keyNo };
   uint8_t resp[40];
   uint8_t respLen = sizeof(resp);
@@ -558,23 +629,258 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
   memcpy(sessionKeyOut + 4, rndB, 4);
   memcpy(sessionKeyOut + 8, rndA + 12, 4);
   memcpy(sessionKeyOut + 12, rndB + 12, 4);
+  if (ivOut) memcpy(ivOut, encRndAResp, 16);
   return true;
 }
 
 // Probiert Legacy-2K3DES zuerst (haeufiger bei DESFire EV0), dann AES
-// (haeufiger bei DESFire EV1+), jeweils mit einem 16-Byte-Nullschluessel
-// (Werks-Default). Gibt bei Erfolg true zurueck und setzt cipherNameOut
-// auf "2K3DES" oder "AES".
-inline bool desfireAuthDefaultKey(uint8_t keyNo, uint8_t sessionKeyOut[16], const char **cipherNameOut) {
-  static const uint8_t zeroKey[16] = {0};
-  if (desfireAuthDes3(keyNo, zeroKey, sessionKeyOut)) {
+// (haeufiger bei DESFire EV1+), jeweils mit EINEM gegebenen 16-Byte-
+// Schluessel. ivOut (16 Byte Puffer, bei 2K3DES sind nur die ersten 8
+// gueltig) bekommt den IV fuer ein direkt folgendes verschluesseltes
+// Kommando (siehe desfireAuthDes3()/desfireAuthAes()). isAesOut zeigt an,
+// welcher Cipher es war (fuer ChangeKey wichtig -- unterschiedliches
+// Kryptogrammformat).
+inline bool desfireAuthWithKey(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16],
+                                uint8_t ivOut[16], const char **cipherNameOut, bool *isAesOut) {
+  if (desfireAuthDes3(keyNo, key16, sessionKeyOut, ivOut)) {
     *cipherNameOut = "2K3DES";
+    if (isAesOut) *isAesOut = false;
     return true;
   }
-  if (desfireAuthAes(keyNo, zeroKey, sessionKeyOut)) {
+  if (desfireAuthAes(keyNo, key16, sessionKeyOut, ivOut)) {
     *cipherNameOut = "AES";
+    if (isAesOut) *isAesOut = true;
     return true;
   }
   *cipherNameOut = "keiner";
   return false;
+}
+
+// Wie oben, aber immer mit dem Werks-Default-Schluessel (16 Nullbytes) --
+// unveraendertes Verhalten/Signatur gegenueber der urspruenglichen
+// Version dieser Funktion (Aufrufer in 05_pn532_spi.ino unveraendert).
+inline bool desfireAuthDefaultKey(uint8_t keyNo, uint8_t sessionKeyOut[16], const char **cipherNameOut) {
+  static const uint8_t zeroKey[16] = {0};
+  uint8_t ivDummy[16];
+  return desfireAuthWithKey(keyNo, zeroKey, sessionKeyOut, ivDummy, cipherNameOut, nullptr);
+}
+
+// Probiert erst den Werks-Default-Schluessel (16 Nullbytes), dann einen
+// gegebenen Custom-Schluessel -- fuer Operationen, bei denen der aktuelle
+// Kartenzustand (noch Werksschluessel oder schon per "Master PW setzen"
+// umgestellt) nicht im Voraus bekannt ist. usedCustomOut zeigt an, welcher
+// der beiden es letztlich war.
+inline bool desfireAuthEitherKey(uint8_t keyNo, const uint8_t customKey16[16], uint8_t sessionKeyOut[16],
+                                  uint8_t ivOut[16], const char **cipherNameOut, bool *isAesOut,
+                                  bool *usedCustomOut) {
+  static const uint8_t zeroKey[16] = {0};
+  if (desfireAuthWithKey(keyNo, zeroKey, sessionKeyOut, ivOut, cipherNameOut, isAesOut)) {
+    *usedCustomOut = false;
+    return true;
+  }
+  if (desfireAuthWithKey(keyNo, customKey16, sessionKeyOut, ivOut, cipherNameOut, isAesOut)) {
+    *usedCustomOut = true;
+    return true;
+  }
+  *usedCustomOut = false;
+  return false;
+}
+
+// ---------------------------------------------------------------------
+// Schreibende DESFire-Kommandos: ChangeKey, CreateApplication,
+// DeleteApplication, CreateValueFile, Credit, Debit, GetValue,
+// CommitTransaction.
+//
+// SICHERHEITSHINWEIS ChangeKey: Das Kryptogramm enthaelt eine CRC, die
+// die KARTE SELBST nach dem Entschluesseln prueft. Stimmen IV,
+// Byte-Layout oder CRC hier nicht exakt mit der NXP-Spezifikation
+// ueberein, verwirft die Karte das Kommando (Status != 0x00) -- der
+// Schluessel bleibt dann UNVERAENDERT, es entsteht kein "kaputter"
+// Schluessel-Zustand. Trotzdem: dieser Code wurde NICHT an echter
+// DESFire-Hardware getestet (siehe Kopfkommentar der Datei).
+// ---------------------------------------------------------------------
+
+// ChangeKey (0xC4) NUR fuer den Fall "eigenen, gerade authentifizierten
+// Schluessel aendern" (KeyNo == mit diesem Schluessel authentifiziert) --
+// genau das macht "Master PW setzen"/"Auf Standard setzen": erst mit dem
+// AKTUELLEN Schluessel authentifizieren (desfireAuthEitherKey()), dann
+// DENSELBEN KeyNo per ChangeKey auf den NEUEN Wert setzen. Der allgemeine
+// Fall "einen ANDEREN Schluessel als den authentifizierten aendern" (mit
+// XOR-Verknuepfung von Alt-/Neuschluessel im Kryptogramm) ist NICHT
+// implementiert, da hier nirgends gebraucht.
+//
+// Kryptogramm-Layout (aus der oeffentlich dokumentierten NXP-Spezifikation
+// bzw. quelloffenen Referenzimplementierungen wie libfreefare
+// rekonstruiert):
+//   2K3DES: NewKey(16) + CRC16(NewKey)(2) -> auf 24 Byte nullgepolstert,
+//           2K3DES-CBC mit dem Sitzungsschluessel, IV = letzter
+//           Chiffretext-Block aus der Authentifizierung.
+//   AES:    NewKey(16) + KeyVersion(1) + CRC32(0xC4,KeyNo,NewKey,KeyVersion)(4)
+//           -> auf 32 Byte nullgepolstert, AES-CBC mit dem
+//           Sitzungsschluessel, IV = letzter Chiffretext-Block aus der
+//           Authentifizierung. WICHTIG: bei AES deckt die CRC den
+//           Kommando-Header (0xC4+KeyNo) mit ab, bei 2K3DES NICHT --
+//           diese Asymmetrie ist Absicht (nicht mein Fehler), siehe
+//           Referenzimplementierung.
+inline bool desfireChangeKeySame(uint8_t keyNo, const uint8_t newKey16[16],
+                                  const uint8_t sessionKey16[16], const uint8_t iv[16], bool isAes) {
+  uint8_t plain[32] = {0};
+  uint8_t cipher[32];
+  size_t totalLen;
+
+  if (isAes) {
+    uint8_t header[19];
+    header[0] = 0xC4;
+    header[1] = keyNo;
+    memcpy(header + 2, newKey16, 16);
+    header[18] = 0x00; // Key-Version -- 0 fuer neu angelegte/zurueckgesetzte Schluessel
+    uint32_t crc = desfireCrc32(header, sizeof(header));
+    memcpy(plain, newKey16, 16);
+    plain[16] = 0x00; // Key-Version, siehe oben
+    plain[17] = (uint8_t)(crc & 0xFF);
+    plain[18] = (uint8_t)((crc >> 8) & 0xFF);
+    plain[19] = (uint8_t)((crc >> 16) & 0xFF);
+    plain[20] = (uint8_t)((crc >> 24) & 0xFF);
+    totalLen = 32; // 21 Nutzbyte auf 32 (2 AES-Bloecke) nullgepolstert
+    desfireAesCbc(sessionKey16, iv, true, plain, cipher, totalLen);
+  } else {
+    uint16_t crc = desfireCrc16(newKey16, 16);
+    memcpy(plain, newKey16, 16);
+    plain[16] = (uint8_t)(crc & 0xFF);
+    plain[17] = (uint8_t)((crc >> 8) & 0xFF);
+    totalLen = 24; // 18 Nutzbyte auf 24 (3 DES-Bloecke) nullgepolstert
+    desfireDes3Cbc(sessionKey16, iv, true, plain, cipher, totalLen);
+  }
+
+  uint8_t params[33];
+  params[0] = keyNo;
+  memcpy(params + 1, cipher, totalLen);
+  uint8_t respBuf[16];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0xC4, params, 1 + totalLen, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireChangeKeySame(key %u): %s (status=0x%02X)\n", keyNo, desfireStatusName(status), status);
+    return false;
+  }
+  return true;
+}
+
+// CreateApplication (0xCA): AID(3, LSB) + KeySettings1(1) + KeySettings2(1).
+// KeySettings1=0x0F: jeder Schluessel nur mit sich selbst aenderbar (passt
+// zum Auth-mit-Key-X-dann-ChangeKey-Key-X-Muster oben), Konfiguration
+// danach nicht mehr aenderbar. KeySettings2: Bit7=1 falls AES verwendet
+// werden soll (sonst (2K3)DES), untere 4 Bit = Anzahl Schluessel in der
+// App (hier immer 1 -- wir nutzen ausschliesslich Key 0).
+inline bool desfireCreateApplication(const uint8_t aid[3], bool aesKeys) {
+  uint8_t params[5];
+  memcpy(params, aid, 3);
+  params[3] = 0x0F;
+  params[4] = (aesKeys ? 0x80 : 0x00) | 0x01;
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0xCA, params, 5, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireCreateApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    return false;
+  }
+  return true;
+}
+
+// DeleteApplication (0xDA): muss auf PICC-Ebene (AID 000000) authentifiziert
+// aufgerufen werden, nicht innerhalb der zu loeschenden App.
+inline bool desfireDeleteApplication(const uint8_t aid[3]) {
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0xDA, aid, 3, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireDeleteApplication(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    return false;
+  }
+  return true;
+}
+
+// CreateValueFile (0xCC): FileNo(1) + CommSettings(1) + AccessRights(2) +
+// LowerLimit(4,LSB) + UpperLimit(4,LSB) + InitialValue(4,LSB) +
+// LimitedCreditEnabled(1). CommSettings=0x00 (Plain) -- unverschluesselt,
+// passt zum Rest dieser Datei (kein CMAC/Secure-Messaging implementiert).
+// AccessRights=0x0000: Lesen/Schreiben/Lesen+Schreiben/Aendern alle mit
+// Key 0. LowerLimit steuert, ob/wie tief das Guthaben durch Debit unter 0
+// fallen kann -- die KARTE SELBST lehnt ein Debit unterhalb LowerLimit ab
+// (siehe desfireDebit()), keine eigene Guthaben-Pruefung noetig.
+inline bool desfireCreateValueFile(uint8_t fileNo, int32_t lowerLimit, int32_t upperLimit, int32_t initialValue) {
+  uint8_t params[17];
+  params[0] = fileNo;
+  params[1] = 0x00;
+  params[2] = 0x00; params[3] = 0x00;
+  desfirePutLE32(params + 4, lowerLimit);
+  desfirePutLE32(params + 8, upperLimit);
+  desfirePutLE32(params + 12, initialValue);
+  params[16] = 0x00;
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0xCC, params, 17, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireCreateValueFile(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    return false;
+  }
+  return true;
+}
+
+inline bool desfireCredit(uint8_t fileNo, int32_t amount) {
+  uint8_t params[5];
+  params[0] = fileNo;
+  desfirePutLE32(params + 1, amount);
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0x0C, params, 5, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireCredit(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    return false;
+  }
+  return true;
+}
+
+// Debit (0xDC) -- die Karte lehnt selbst ab (typischerweise Status 0xBE
+// BOUNDARY_ERROR), wenn der Abbuchungsbetrag das Guthaben unter
+// LowerLimit (siehe desfireCreateValueFile()) druecken wuerde. Keine
+// eigene Vorab-Pruefung noetig/implementiert.
+inline bool desfireDebit(uint8_t fileNo, int32_t amount) {
+  uint8_t params[5];
+  params[0] = fileNo;
+  desfirePutLE32(params + 1, amount);
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0xDC, params, 5, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireDebit(): %s (status=0x%02X) -- vermutlich zu wenig Guthaben, falls BOUNDARY_ERROR.\n",
+                  desfireStatusName(status), status);
+    return false;
+  }
+  return true;
+}
+
+inline bool desfireGetValue(uint8_t fileNo, int32_t &valueOut) {
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0x6C, &fileNo, 1, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00 || respLen < 4) {
+    Serial.printf("desfireGetValue(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    return false;
+  }
+  valueOut = desfireGetLE32(respBuf);
+  return true;
+}
+
+// CommitTransaction (0xC7) -- OHNE das werden Credit/Debit beim naechsten
+// Kommando bzw. beim Verlassen des RF-Feldes automatisch verworfen
+// (DESFire-Transaktionsmodell). Immer direkt nach Credit/Debit aufrufen.
+inline bool desfireCommitTransaction() {
+  uint8_t respBuf[8];
+  uint16_t respLen = 0;
+  uint8_t status = desfireTransceive(0xC7, nullptr, 0, respBuf, &respLen, sizeof(respBuf));
+  if (status != 0x00) {
+    Serial.printf("desfireCommitTransaction(): %s (status=0x%02X)\n", desfireStatusName(status), status);
+    return false;
+  }
+  return true;
 }
