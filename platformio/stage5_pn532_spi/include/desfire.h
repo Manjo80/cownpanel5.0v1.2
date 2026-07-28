@@ -90,6 +90,24 @@ inline const char *desfireStatusName(uint8_t status) {
   }
 }
 
+// Formatiert bis zu 16 Byte als Hex-String fuers Log -- reine Diagnose-
+// Hilfsfunktion, um bei einem Authentifizierungsfehlschlag die tatsaechlich
+// ausgetauschten Rohdaten sichtbar zu machen (z. B. um zu pruefen, ob eine
+// fehlgeschlagene RndA-Rueckpruefung an voellig zufaelligen oder eher
+// "fast richtigen" Bytes liegt). Muss VOR desfireGetFileIDs() (nutzt es
+// ebenfalls) stehen -- anders als beim .ino-Build generiert PlatformIOs
+// main.cpp-Build keine automatischen Funktions-Prototypen, eine
+// Vorwaertsreferenz waere dort ein Compile-Fehler (siehe Kopfkommentar
+// zu diesem wiederkehrenden Muster in 05_pn532_spi.ino).
+inline void logHex(const char *label, const uint8_t *data, size_t len) {
+  char hex[56] = "";
+  size_t pos = 0;
+  for (size_t i = 0; i < len && pos + 3 < sizeof(hex); i++) {
+    pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", data[i]);
+  }
+  logMsg("  %s: %s", label, hex);
+}
+
 // Sendet ein natives DESFire-Kommando und sammelt automatisch weitere
 // Antwort-Frames ein, solange die Karte Status 0xAF (ADDITIONAL_FRAME)
 // zurueckgibt (abgeholt mit dem GetAdditionalFrame-Kommando 0xAF ohne
@@ -526,20 +544,6 @@ inline void desfireAesCbc(const uint8_t key16[16], const uint8_t iv[16], bool en
   memcpy(ivBuf, iv, 16);
   mbedtls_aes_crypt_cbc(&ctx, encrypt ? MBEDTLS_AES_ENCRYPT : MBEDTLS_AES_DECRYPT, len, ivBuf, in, out);
   mbedtls_aes_free(&ctx);
-}
-
-// Formatiert bis zu 16 Byte als Hex-String fuers Log -- reine Diagnose-
-// Hilfsfunktion, um bei einem Authentifizierungsfehlschlag die tatsaechlich
-// ausgetauschten Rohdaten sichtbar zu machen (z. B. um zu pruefen, ob eine
-// fehlgeschlagene RndA-Rueckpruefung an voellig zufaelligen oder eher
-// "fast richtigen" Bytes liegt).
-inline void logHex(const char *label, const uint8_t *data, size_t len) {
-  char hex[56] = "";
-  size_t pos = 0;
-  for (size_t i = 0; i < len && pos + 3 < sizeof(hex); i++) {
-    pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", data[i]);
-  }
-  logMsg("  %s: %s", label, hex);
 }
 
 // 2K3DES-Authentifizierung, ISO/IEC-9798-2-3-Pass-Mutual-Authentication.
