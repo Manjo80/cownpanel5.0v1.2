@@ -309,6 +309,20 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   `05_pn532_spi.ino`/`main.cpp` hochgezählt. Steht nach dem Flashen dort
   eine ältere Nummer als erwartet, wurde entweder nicht neu gepullt oder
   das falsche Projekt/der falsche Ordner gebaut.
+- **Vormerkung fürs Lesen/Schreiben größerer Dateien (noch nicht
+  implementiert, aktuell nur `CreateValueFile`/`Credit`/`Debit`/
+  `GetValue` mit winzigen Kommandos):** Ein unabhängiges Tutorial
+  (AndroidCrypto, "ESP32 + Adafruit_PN532 + DESFire EVx", Medium,
+  Nov. 2025 — nutzt dieselben zwei Pflicht-Patches an der
+  Adafruit-Bibliothek wie wir, siehe oben) beschreibt ein zusätzliches
+  PN532-Limit: einzelne `inDataExchange()`-Aufrufe mit mehr als ~223 Byte
+  Nutzdaten liefern trotz auf 255 gepatchtem `PN532_PACKBUFFSIZ` keinen
+  Fehler, sondern scheinbar zufälligen PN532-internen Speicherinhalt
+  zurück. Lösung dort: größere Schreib-/Lesevorgänge selbst in Stücke von
+  z. B. 210 Byte aufteilen (mehrere `inDataExchange()`-Aufrufe statt
+  einem). Betrifft uns aktuell nicht (alle unsere Kommandos sind winzig),
+  aber unbedingt beachten, sobald hier mal größere Standard-Data-Files
+  gelesen/geschrieben werden sollen.
 
 ## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
 
@@ -819,6 +833,35 @@ DESFire-Tiefenauslese-Log zeigte "Woche 39 / 2037" statt korrekt
 normale Binärzahl ausgegeben (Byte `0x27` dezimal ausgegeben ergibt
 fälschlich "39" statt BCD-dekodiert korrekt "27"). Jetzt mit echter
 BCD-Dekodierung.
+
+**Nachtrag 6 — Authentifizierung funktioniert jetzt tatsächlich!** Test
+mit dem 0x1A-Fix (Nachtrag 4) an echter Hardware: **kein**
+"RndA-Rückprüfung fehlgeschlagen" mehr im Log — die Authentifizierung
+gelingt jetzt beim ersten Versuch. Der Ablauf kam bis zu
+`desfireChangeKeySame()`, die dort mit `INTEGRITY_ERROR` (Status `0x1E`)
+scheiterte — ein neuer, aber klar eingegrenzter Fehler (die Karte
+entschlüsselt das ChangeKey-Kryptogramm erfolgreich, verwirft es aber
+wegen einer nicht passenden CRC-Prüfsumme).
+
+Grund (wieder gegen den echten Proxmark3-Quellcode geprüft,
+`DesfireChangeKey()` in `desfirecore.c`): Die 2K3DES-Variante von
+`desfireChangeKeySame()` verwendete noch die alte D40-Konvention (CRC16
+NUR über den neuen Schlüssel). Da die Sitzung inzwischen über den
+EV1-Kanal läuft (Kommando `0x1A`, siehe Nachtrag 4), erwartet die Karte
+aber die EV1-Konvention: **CRC32 über Kommandobyte + KeyNo + NewKey**
+(Proxmark3-Kommentar: *"EV1 Checksum must cover: \<KeyNo\>
+\<PrevKey XOR Newkey\>"*). Die AES-Variante war davon nicht betroffen —
+sie deckte den Kommando-Header schon immer mit ab. **Fix:** 2K3DES-Zweig
+auf CRC32 über `(0xC4, KeyNo, NewKey)` umgestellt, exakt wie im
+AES-Zweig, nur ohne KeyVersion-Byte.
+
+**Wichtiger Hinweis:** Auch dieser Fix ist bisher NICHT an echter
+Hardware gegengetestet. Bitte neu flashen, "MASTER-PW SETZEN" erneut
+versuchen und das Log schicken — falls es weiterhin an ChangeKey
+scheitert, sind die wahrscheinlichsten verbliebenen Verdächtigen die
+Sitzungsschlüssel-Formel oder der Start-IV (beide erst in Nachtrag 4
+eingeführt und noch nie an echter Hardware bestätigt, da vorher die
+Authentifizierung selbst schon scheiterte).
 
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
