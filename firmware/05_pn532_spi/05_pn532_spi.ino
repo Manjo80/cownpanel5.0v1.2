@@ -196,7 +196,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.7";
+const char *FIRMWARE_VERSION = "2026-07-28.10";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -970,9 +970,16 @@ void desfireDeepRead() {
                ver.swStorageSize, ver.swProtocol);
     log.printf("UID: %02X:%02X:%02X:%02X:%02X:%02X:%02X\n",
                ver.uid[0], ver.uid[1], ver.uid[2], ver.uid[3], ver.uid[4], ver.uid[5], ver.uid[6]);
+    // productionWeek/-year sind BCD-kodiert (NXP-Konvention), NICHT
+    // Binaerzahlen -- Byte 0x27 bedeutet Woche 27, nicht 39. Ohne
+    // BCD-Dekodierung zeigte das Log bisher z. B. "Woche 39 / 2037" statt
+    // korrekt "Woche 27 / 2025" (an echter Hardware aufgefallen, siehe
+    // firmware/README.md).
+    uint8_t prodWeek = ((ver.productionWeek >> 4) & 0x0F) * 10 + (ver.productionWeek & 0x0F);
+    uint8_t prodYear = ((ver.productionYear >> 4) & 0x0F) * 10 + (ver.productionYear & 0x0F);
     log.printf("Batch: %02X%02X%02X%02X%02X, Produktion: Woche %u / 20%02u\n",
                ver.batchNo[0], ver.batchNo[1], ver.batchNo[2], ver.batchNo[3], ver.batchNo[4],
-               ver.productionWeek, ver.productionYear);
+               prodWeek, prodYear);
   }
 
   uint8_t aids[28][3];
@@ -1644,7 +1651,7 @@ void loop() {
         ntpOk = syncFromNtp();
         updateRtcInfo();
 #else
-        logMsg("NTP-Sync deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren und wifi_secrets.h anlegen.");
+        logMsg("NTP-Sync deaktiviert -- wifi_secrets.h fehlt (siehe wifi_secrets.example.h) oder es wurde seit dem Anlegen nicht neu kompiliert.");
 #endif
         buzzerBeep(80);
         drawButton(btnSettingsNtpSync, ntpOk ? TFT_DARKGREY : TFT_RED);
@@ -1672,7 +1679,7 @@ void loop() {
         }
         updateWifiInfo();
 #else
-        logMsg("WLAN/ESP-NOW-Umschaltung deaktiviert -- USE_WIFI_NTP_SYNC einkommentieren.");
+        logMsg("WLAN/ESP-NOW-Umschaltung deaktiviert -- wifi_secrets.h fehlt (siehe wifi_secrets.example.h) oder es wurde seit dem Anlegen nicht neu kompiliert.");
 #endif
         buzzerBeep(80);
         drawButton(btnSettingsWifiToggle, TFT_DARKGREY);

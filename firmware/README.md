@@ -655,6 +655,171 @@ geloggt. Beim Setup wird zusätzlich jede registrierte SSID einzeln
 geloggt (vorher nur die Anzahl) — hilft zu prüfen, ob `wifi_secrets.h`
 korrekt eingelesen wurde.
 
+**Bugfix: veraltete Log-Meldung "USE_WIFI_NTP_SYNC einkommentieren".**
+Diese Meldung stammt noch aus der Zeit VOR dem `__has_include`-Fix (siehe
+oben) und beschrieb einen Mechanismus, der gar nicht mehr existiert — seit
+dem Fix entscheidet einzig und allein, ob `wifi_secrets.h` beim
+**Kompilieren** existiert, nichts wird mehr ein- oder auskommentiert.
+Beide Meldungen (NTP-SYNC-Button und WLAN/ESP-NOW-Umschalter) korrigiert:
+weisen jetzt korrekt darauf hin, dass entweder `wifi_secrets.h` fehlt
+(Vorlage: `wifi_secrets.example.h`) oder seit dem Anlegen nicht neu
+kompiliert wurde. **Wichtig:** Das ist ein reiner
+`#if __has_include(...)`-Compile-Zeit-Schalter — nur HOCHLADEN reicht
+nicht, es muss ein ECHTER Neu-Build sein (in der Arduino IDE reicht ein
+normaler Upload, der kompiliert automatisch neu; in PlatformIO im Zweifel
+"Clean" vor "Build/Upload", falls trotz vorhandener `wifi_secrets.h`
+weiterhin diese Meldung erscheint).
+
+**Nachtrag 3: Auch mit exaktem Text-Log (keine Foto-Abtippfehler mehr)
+weiterhin kein Treffer.** Ein sauberes, aus der SD-Textdatei kopiertes Log
+(alle 4 Kryptowerte pro Versuch: `EncRndB`, `RndB`, `RndA`, `EncAB[0:8]`,
+`EncAB[8:16]`, `EncRndAResp`, berechnetes/erwartetes `RndA'`) wurde
+vollständig gegen `pycryptodome` nachgerechnet. Beide Sanity-Checks
+bestanden (eigene `RndB`-Entschlüsselung und eigene `RndA'`-Berechnung
+reproduzierbar — die geloggten Werte UND die Übertragung sind also
+korrekt). Eine **erschöpfende** Suche über alle plausiblen IV-Kandidaten
+(`0`, `EncRndB`, `EncAB[0:8]`, `EncAB[8:16]`, `RndA`, `RndB`, rotiertes
+`RndB`) × beide XOR-Reihenfolgen (XOR-vor-Chiffre wie beim Legacy-
+Sende-Schritt / Chiffre-dann-XOR wie beim normalen CBC-Empfang) × alle
+plausiblen Zielwerte (`RndA` rotiert links/rechts/unrotiert, `RndB`
+rotiert/unrotiert) fand **keine einzige Kombination**, die zum tatsächlich
+erwarteten Wert passt — bei allen 3 unabhängigen Versuchen im Log.
+
+Das schließt praktisch jede denkbare simple IV-/Verkettungs-/
+Reihenfolge-Variante aus. Gleichzeitig spricht die Schrittfolge im Log
+GEGEN einen falschen Schlüssel: Status `0x00` in Schritt 2 (Karte
+akzeptiert das Kryptogramm) UND der sofortige `0xAE`-Fehlschlag von
+`desfireAuthAes` bereits in Schritt 1 (Karte lehnt Schlüssel 0 für den
+AES-Befehlstyp direkt ab, ohne ueberhaupt eine Challenge zu stellen —
+das bestätigt unabhängig, dass Schlüssel 0 tatsächlich als
+Legacy-2TDEA-Schlüssel konfiguriert ist, passend zu unserer Annahme).
+
+**Ehrlicher Stand:** Die Ursache liegt an dieser Stelle außerhalb dessen,
+was sich per Log-Analyse und Nachrechnen ohne echten Zugriff auf die
+Karten-Gegenseite weiter eingrenzen lässt. Denkbare Erklärungen, die sich
+von hier aus nicht mehr unterscheiden lassen: (a) eine PN532-/
+Adafruit-Bibliotheks-Eigenheit spezifisch für dieses rohe
+`inDataExchange()`-Antwort-Muster (Authenticate nutzt bewusst NICHT
+`desfireTransceive()`, siehe Kopfkommentar dort), (b) eine EV3-spezifische
+Abweichung vom in libfreefare (primär EV0/EV1) implementierten Ablauf, die
+über die bereits geprüfte Verschlüsselungs-vs-Entschlüsselungs-Eigenheit
+hinausgeht. **Empfehlung, falls weiter benötigt:** unabhängige
+Gegenprobe mit einem PC-seitigen Werkzeug (z. B. ein zweiter PN532/
+ACR122U an einem PC mit `libnfc`/`libfreefare`, oder ein Python-Skript mit
+`nfcpy`) gegen dieselbe physische Karte — das würde eindeutig trennen, ob
+das Problem im eigenen Code oder in einer Karten-/Chip-Eigenheit liegt,
+die keine reine Log-Analyse mehr aufdecken kann.
+
+**Nachtrag 4 — GELÖST (per unabhängiger Gegenprobe mit einem iCopy X /
+Proxmark3): Kommando 0x0A war falsch, richtig ist 0x1A.** Genau die oben
+empfohlene Gegenprobe wurde durchgeführt: ein iCopy X (Proxmark3-
+iceman-Firmware) mit `hf mfdes auth -n 0 -t 2tdea -k
+00000000000000000000000000000000` gegen dieselbe physische Karte —
+**Ergebnis: "PICC selected and authenticated succesfully"**. Das beweist
+zweifelsfrei: der Werks-Default-Schlüssel (16 Nullbytes) ist korrekt,
+unser eigener Code hatte tatsächlich einen Bug.
+
+Der tatsächliche Proxmark3-Quellcode (RfidResearchGroup/proxmark3,
+`client/src/mifare/desfirecore.c`, Funktion `DesfireAuthenticateEV1()`)
+wurde direkt von GitHub geladen und gelesen (nicht nur zusammengefasst).
+Zentraler Fund: Für einen 2K3DES-artigen Schlüssel sendet Proxmark3 im
+"EV1"-Sicherheitskanal (den es für diese Karte automatisch wählt, siehe
+`Secure channel: ev1` in der obigen Ausgabe) **Kommando `0x1A`
+(`AUTHENTICATE_ISO`), NICHT `0x0A` (`AUTHENTICATE`/"Legacy")**:
+
+```c
+if (secureChannel == DACEV1) {
+    if (dctx->keyType == T_AES)
+        subcommand = MFDES_AUTHENTICATE_AES;
+    else
+        subcommand = MFDES_AUTHENTICATE_ISO;   // 0x1A, nicht 0x0A!
+}
+```
+
+Unser Code (und die als Referenz genutzte libfreefare, die für einen
+2K3DES-Schlüssel `AUTHENTICATE_LEGACY`/`0x0A` wählt — nachvollziehbar,
+libfreefare stammt primär aus der EV0/EV1-Ära) sendete bisher immer
+`0x0A`. Die Karte akzeptiert `0x0A` zwar SYNTAKTISCH (Status `0x00` in
+Schritt 2), verarbeitet es aber intern offenbar anders als `0x1A` — exakt
+das erklärt das beobachtete Muster ("formal angenommen, aber die eigene
+Rückprüfung passt nie"). Krypto-Struktur und IV-Verkettung sind zwischen
+`0x0A` und `0x1A` laut Proxmark3-Quellcode IDENTISCH (beide nutzen
+verkettetes CBC über die gesamte Sitzung, normale Verschlüsselung für den
+PCD→PICC-Schritt) — nur das Kommandobyte unterscheidet sich. **Fix:**
+`desfireAuthDes3()` sendet jetzt `0x1A` statt `0x0A`. Die zuvor (Nachtrag
+1) eingebaute "Legacy sendet mit Entschlüsselungs- statt
+Verschlüsselungs-Chiffre"-Sonderbehandlung (basierend auf libfreefares
+`AUTHENTICATE_LEGACY`-Fallunterscheidung) wurde wieder entfernt — sie war
+beim Werks-Nullschlüssel ohnehin mathematisch wirkungslos (siehe
+Nachtrag 1) und passt nicht zum jetzt bestätigten EV1-Pfad.
+
+**Zwei weitere, ebenfalls gegen den Proxmark3-Quellcode verifizierte
+Bugfixes** (beide erst NACH erfolgreicher Authentifizierung relevant,
+für `desfireChangeKeySame()` direkt im Anschluss — ohne sie wäre
+"MASTER-PW SETZEN" trotz jetzt erfolgreicher Authentifizierung
+vermutlich am ChangeKey-Schritt gescheitert):
+
+1. **IV nach Authentifizierung ist 0, nicht der letzte Chiffretext-
+   Block.** `desfireAuthDes3()`/`desfireAuthAes()` gaben bisher über
+   `ivOut` den letzten ausgetauschten Chiffretext-Block zurück — laut
+   Proxmark3 (`memset(dctx->IV, 0, ...)` direkt nach der
+   Sitzungsschlüssel-Berechnung) ist der korrekte Start-IV für ein
+   direkt folgendes Kommando wie ChangeKey aber schlicht **Null**.
+2. **Sitzungsschlüssel-Sonderfall bei K1==K2 (Werks-Default!).** Die
+   normale Formel `RndA[0:4] + RndB[0:4] + RndA[4:8] + RndB[4:8]` gilt
+   nur, wenn die beiden 8-Byte-Hälften des Authentifizierungsschlüssels
+   verschieden sind. Beim Werks-Default (16 Nullbytes, K1=K2, siehe
+   Kopfkommentar bei `desfireDes3SetKey()`) muss die zweite Hälfte des
+   Sitzungsschlüssels stattdessen die ERSTE wiederholen (Proxmark3-
+   Kommentar: *"If the 3Des key first 8 bytes = 2nd 8 Bytes then we are
+   really using Singe Des... we need to set the session key such that
+   the 2nd 8 bytes = 1st 8 bytes"*) — genau der Fall, der bei
+   "MASTER-PW SETZEN" mit noch unverändertem Werksschlüssel eintritt.
+
+**Wichtiger Hinweis:** Dieser Fix wurde bisher NICHT an echter Hardware
+gegengetestet (nur die Proxmark3-Gegenprobe bestätigt den Schlüssel und
+das Kommando-Byte, nicht unseren eigenen Code erneut). Bitte nach dem
+nächsten Flash erneut "MASTER-PW SETZEN" probieren und das Log schicken.
+
+**Nachtrag 5 — 0x1A behebt es NICHT; Krypto-Algorithmus jetzt aber
+BEWIESEN korrekt, Verdacht auf Empfangsseite.** Test mit dem 0x1A-Fix an
+echter Hardware: gleiches Muster wie zuvor (Status `0x00`, eigene
+Rückprüfung schlägt bei allen 3 unabhängigen Versuchen fehl). Um das ein
+für alle Mal zu klären, wurde der komplette Proxmark3-Algorithmus
+(`DesfireAuthenticateEV1()`) 1:1 in Python nachgebaut (nicht nur
+einzelne Formeln verglichen, sondern die komplette Funktion inkl.
+`DesfireCryptoEncDecEx`/`DesfireCryptoEncDecSingleBlock`) und mit den
+echten geloggten Werten eines Versuchs gefüttert:
+
+- Das von unserem eigenen Code gesendete `EncAB` (16 Byte) ist
+  **bit-identisch** mit dem, was der nachgebaute Proxmark3-Algorithmus
+  aus denselben `RndA`/`RndB`-Werten berechnet. Das beweist: unsere
+  Sende-Seite (Verschlüsselung, IV-Verkettung, K1/K2-Handhabung) ist zu
+  100 % korrekt, keine Vermutung mehr.
+- ABER: derselbe nachgebaute Proxmark3-Algorithmus scheitert AUCH beim
+  Verifizieren der ECHTEN Kartenantwort (`EncRndAResp`) aus unserem Log --
+  mit dem exakt gleichen falschen Ergebnis wie unser eigener Code.
+
+Das verschiebt den Verdacht eindeutig: **nicht** unser Kryptografie-
+Algorithmus (jetzt bewiesen korrekt), sondern entweder (a) die vom PN532
+tatsächlich empfangenen 8 Byte `EncRndAResp` stimmen nicht mit dem
+überein, was die Karte wirklich gesendet hat (Empfangsseite/Framing/
+Pufferproblem beim Adafruit_PN532-`inDataExchange()` speziell für DIESE
+Antwort), oder (b) die tatsächliche Antwortlänge weicht von den
+angenommenen 9 Byte (1 Status + 8 Nutzdaten) ab und wir lesen die
+falschen Bytes. **Ergänzt:** `desfireAuthDes3()` loggt jetzt zusätzlich
+die exakte `respLen` UND den kompletten Rohantwortpuffer (nicht nur die
+interpretierten 8 Byte) direkt nach Schritt 2 -- das nächste Log zeigt
+damit, ob hier tatsächlich mehr/andere Bytes ankommen als erwartet.
+
+Nebenbei gefunden und behoben: Die Produktionswoche/-jahr-Anzeige im
+DESFire-Tiefenauslese-Log zeigte "Woche 39 / 2037" statt korrekt
+"Woche 27 / 2025" (Vergleich mit TagInfo) -- `productionWeek`/
+`productionYear` sind BCD-kodiert (NXP-Konvention), wurden aber als
+normale Binärzahl ausgegeben (Byte `0x27` dezimal ausgegeben ergibt
+fälschlich "39" statt BCD-dekodiert korrekt "27"). Jetzt mit echter
+BCD-Dekodierung.
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele
