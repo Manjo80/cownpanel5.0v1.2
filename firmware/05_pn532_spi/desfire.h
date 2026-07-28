@@ -591,6 +591,16 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
                     respLen > 0 ? resp[0] : 0xFF, respLen);
       return false;
     }
+    // Diagnose: exakte Antwortlaenge + KOMPLETTER Rohpuffer (nicht nur die
+    // interpretierten 8 Byte) -- die "send"-Seite ist inzwischen bit-genau
+    // gegen den tatsaechlichen Proxmark3-Algorithmus verifiziert (siehe
+    // firmware/README.md Nachtrag 5), der Verdacht faellt deshalb auf die
+    // EMPFANGSSEITE dieser konkreten Antwort: falls respLen != 9 waere,
+    // wuerden wir hier faelschlich die ERSTEN 8 Byte einer laengeren/
+    // anders aufgebauten Antwort als encRndAResp interpretieren.
+    logMsg("desfireAuthDes3: Schritt-2-Antwort respLen=%u", respLen);
+    logHex("resp[] roh (bis respLen)", resp, respLen);
+
     uint8_t encRndAResp[8];
     memcpy(encRndAResp, resp + 1, 8);
 

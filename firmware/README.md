@@ -781,6 +781,45 @@ gegengetestet (nur die Proxmark3-Gegenprobe bestätigt den Schlüssel und
 das Kommando-Byte, nicht unseren eigenen Code erneut). Bitte nach dem
 nächsten Flash erneut "MASTER-PW SETZEN" probieren und das Log schicken.
 
+**Nachtrag 5 — 0x1A behebt es NICHT; Krypto-Algorithmus jetzt aber
+BEWIESEN korrekt, Verdacht auf Empfangsseite.** Test mit dem 0x1A-Fix an
+echter Hardware: gleiches Muster wie zuvor (Status `0x00`, eigene
+Rückprüfung schlägt bei allen 3 unabhängigen Versuchen fehl). Um das ein
+für alle Mal zu klären, wurde der komplette Proxmark3-Algorithmus
+(`DesfireAuthenticateEV1()`) 1:1 in Python nachgebaut (nicht nur
+einzelne Formeln verglichen, sondern die komplette Funktion inkl.
+`DesfireCryptoEncDecEx`/`DesfireCryptoEncDecSingleBlock`) und mit den
+echten geloggten Werten eines Versuchs gefüttert:
+
+- Das von unserem eigenen Code gesendete `EncAB` (16 Byte) ist
+  **bit-identisch** mit dem, was der nachgebaute Proxmark3-Algorithmus
+  aus denselben `RndA`/`RndB`-Werten berechnet. Das beweist: unsere
+  Sende-Seite (Verschlüsselung, IV-Verkettung, K1/K2-Handhabung) ist zu
+  100 % korrekt, keine Vermutung mehr.
+- ABER: derselbe nachgebaute Proxmark3-Algorithmus scheitert AUCH beim
+  Verifizieren der ECHTEN Kartenantwort (`EncRndAResp`) aus unserem Log --
+  mit dem exakt gleichen falschen Ergebnis wie unser eigener Code.
+
+Das verschiebt den Verdacht eindeutig: **nicht** unser Kryptografie-
+Algorithmus (jetzt bewiesen korrekt), sondern entweder (a) die vom PN532
+tatsächlich empfangenen 8 Byte `EncRndAResp` stimmen nicht mit dem
+überein, was die Karte wirklich gesendet hat (Empfangsseite/Framing/
+Pufferproblem beim Adafruit_PN532-`inDataExchange()` speziell für DIESE
+Antwort), oder (b) die tatsächliche Antwortlänge weicht von den
+angenommenen 9 Byte (1 Status + 8 Nutzdaten) ab und wir lesen die
+falschen Bytes. **Ergänzt:** `desfireAuthDes3()` loggt jetzt zusätzlich
+die exakte `respLen` UND den kompletten Rohantwortpuffer (nicht nur die
+interpretierten 8 Byte) direkt nach Schritt 2 -- das nächste Log zeigt
+damit, ob hier tatsächlich mehr/andere Bytes ankommen als erwartet.
+
+Nebenbei gefunden und behoben: Die Produktionswoche/-jahr-Anzeige im
+DESFire-Tiefenauslese-Log zeigte "Woche 39 / 2037" statt korrekt
+"Woche 27 / 2025" (Vergleich mit TagInfo) -- `productionWeek`/
+`productionYear` sind BCD-kodiert (NXP-Konvention), wurden aber als
+normale Binärzahl ausgegeben (Byte `0x27` dezimal ausgegeben ergibt
+fälschlich "39" statt BCD-dekodiert korrekt "27"). Jetzt mit echter
+BCD-Dekodierung.
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele
