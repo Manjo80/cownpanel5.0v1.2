@@ -143,7 +143,14 @@ inline void logMsg(const char *fmt, ...) {
 #if __has_include("wifi_secrets.h")
 #define USE_WIFI_NTP_SYNC
 #include <time.h>
+#include <WiFiMulti.h>
 #include "wifi_secrets.h"
+// Erlaubt das Eintragen mehrerer WLAN-Netzwerke in wifi_secrets.h (siehe
+// wifi_secrets.example.h) -- WiFiMulti waehlt beim Verbinden automatisch
+// das staerkste gerade in Reichweite befindliche Netzwerk aus der Liste,
+// statt (wie vorher) fest an EINE SSID/Passwort-Kombination gebunden zu
+// sein.
+WiFiMulti wifiMulti;
 #endif
 
 // canvas zeigt per setBuffer() direkt auf den von rgbPanelInit()
@@ -155,7 +162,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.3";
+const char *FIRMWARE_VERSION = "2026-07-28.4";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -363,6 +370,13 @@ uint16_t wifiIpColor = TFT_LIGHTGREY;
 bool wlanModeActive = false;
 const uint32_t WIFI_POLL_INTERVAL_MS = 1000;
 uint32_t lastWifiPollMs = 0;
+// Reconnect-Versuche via WiFiMulti (siehe loop()) -- deutlich seltener als
+// WIFI_POLL_INTERVAL_MS, da wifiMulti.run() bei fehlender Verbindung selbst
+// mit kurzem Timeout noch einen blockierenden Scan durchfuehrt (WiFi.
+// scanNetworks() laesst sich nicht vermeiden) und das sonst staendig
+// ESP-NOW/Touch-Reaktionszeit stoeren wuerde.
+const uint32_t WIFI_MULTI_RETRY_INTERVAL_MS = 15000;
+uint32_t lastWifiMultiRetryMs = 0;
 
 // Bereichsgrenzen der einzelnen Update-Funktionen -- an einer Stelle
 // definiert, damit das fillRect() in der jeweiligen Funktion garantiert
@@ -1369,6 +1383,18 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
 
+#ifdef USE_WIFI_NTP_SYNC
+  // Alle in wifi_secrets.h eingetragenen Netzwerke bei WiFiMulti anmelden --
+  // muss nur einmal passieren, das eigentliche Verbinden/Auswaehlen
+  // uebernimmt spaeter wifiMulti.run() (siehe WLAN/ESP-NOW-Umschalter und
+  // das periodische Reconnect-Polling in loop()).
+  for (size_t i = 0; i < sizeof(WIFI_SECRETS) / sizeof(WIFI_SECRETS[0]); i++) {
+    wifiMulti.addAP(WIFI_SECRETS[i].ssid, WIFI_SECRETS[i].password);
+  }
+  logMsg("WiFiMulti: %u Netzwerk(e) aus wifi_secrets.h registriert.\n",
+         (unsigned)(sizeof(WIFI_SECRETS) / sizeof(WIFI_SECRETS[0])));
+#endif
+
   // Direkt nach WiFi.mode() liefert WiFi.macAddress() auf manchen Boards bei
   // echtem Stromlos-Start noch "00:00:00:00:00:00" -- kurz auf eine echte
   // Adresse warten (siehe firmware/README.md Abschnitt 7).
@@ -1456,6 +1482,20 @@ void loop() {
       lastWifiPollMs = now;
       updateWifiInfo();
     }
+
+#ifdef USE_WIFI_NTP_SYNC
+    // Reconnect, falls die Verbindung zwischenzeitlich wegbrach (z. B.
+    // Netzwerk kurz ausser Reichweite) oder das staerkste Netzwerk
+    // gewechselt hat -- deutlich seltener als das reine Status-Polling
+    // oben, da hier bei fehlender Verbindung ein blockierender Scan
+    // anfaellt (siehe Kommentar bei WIFI_MULTI_RETRY_INTERVAL_MS).
+    if (wlanModeActive && WiFi.status() != WL_CONNECTED &&
+        now - lastWifiMultiRetryMs >= WIFI_MULTI_RETRY_INTERVAL_MS) {
+      lastWifiMultiRetryMs = now;
+      wifiMulti.run();
+      updateWifiInfo();
+    }
+#endif
 
     if (now - lastSendMs >= SEND_INTERVAL_MS) {
       lastSendMs = now;
@@ -1573,8 +1613,14 @@ void loop() {
 #ifdef USE_WIFI_NTP_SYNC
         wlanModeActive = !wlanModeActive;
         if (wlanModeActive) {
-          WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-          logMsg("WLAN-Modus aktiviert -- verbinde fuer NTP (siehe WLAN-IP-Zeile) ...");
+          // wifiMulti.run() blockiert bis zu 5s (Scan + Verbindungsversuch
+          // mit dem staerksten bekannten Netzwerk) -- akzeptabel, da dies
+          // nur bei einem bewussten Tastendruck passiert, nicht periodisch
+          // (siehe periodisches Reconnect-Polling unten, das deutlich
+          // seltener und mit kuerzerem Timeout laeuft).
+          wifiMulti.run();
+          lastWifiMultiRetryMs = millis();
+          logMsg("WLAN-Modus aktiviert -- verbinde mit staerkstem bekannten Netzwerk (siehe WLAN-IP-Zeile) ...");
         } else {
           WiFi.disconnect();
           logMsg("ESP-NOW-Modus aktiviert -- WLAN-Verbindung getrennt.");

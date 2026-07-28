@@ -502,67 +502,88 @@ inline void desfireAesCbc(const uint8_t key16[16], const uint8_t iv[16], bool en
 // braucht, bekommt ihn explizit uebergeben.
 inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16],
                              uint8_t ivOut[8] = nullptr) {
-  uint8_t send1[2] = { 0x0A, keyNo };
-  uint8_t resp[32];
-  uint8_t respLen = sizeof(resp);
-  if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 9 || resp[0] != 0xAF) {
-    logMsg("desfireAuthDes3: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
-                  respLen > 0 ? resp[0] : 0xFF, respLen);
-    return false;
+  // Bis zu 3 komplette Versuche, ABER NUR falls die Karte in Schritt 2
+  // bereits mit Status 0x00 (= Schluessel akzeptiert!) geantwortet hat und
+  // erst UNSERE eigene RndA-Rueckpruefung fehlschlaegt. Ein wirklich
+  // falscher Schluessel fuehrt (Blockchiffre-Entschluesselung mit falschem
+  // Schluessel liefert Pseudozufall) mit ueberwaeltigender Wahrscheinlichkeit
+  // schon in Schritt 2 zu Status 0xAE von der Karte selbst -- dort wird
+  // sofort abgebrochen (kein sinnloses Retry). Erreichen wir dagegen die
+  // RndA-Rueckpruefung mit Status 0x00, aber mit falschem Ergebnis, ist der
+  // Schluessel mit an Sicherheit grenzender Wahrscheinlichkeit korrekt und
+  // es handelt sich um einen einzelnen Uebertragungsfehler auf der
+  // Luftschnittstelle -- ein erneuter (komplett neuer) Challenge-Response-
+  // Durchlauf behebt das typischerweise.
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    uint8_t send1[2] = { 0x0A, keyNo };
+    uint8_t resp[32];
+    uint8_t respLen = sizeof(resp);
+    if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 9 || resp[0] != 0xAF) {
+      logMsg("desfireAuthDes3: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
+                    respLen > 0 ? resp[0] : 0xFF, respLen);
+      return false;
+    }
+    uint8_t encRndB[8];
+    memcpy(encRndB, resp + 1, 8);
+
+    uint8_t ivZero[8] = {0};
+    uint8_t rndB[8];
+    desfireDes3Cbc(key16, ivZero, false, encRndB, rndB, 8);
+
+    uint8_t rndA[8];
+    esp_fill_random(rndA, 8);
+
+    uint8_t rndBRot[8];
+    memcpy(rndBRot, rndB, 8);
+    desfireRotateLeft1(rndBRot, 8);
+
+    uint8_t plainAB[16];
+    memcpy(plainAB, rndA, 8);
+    memcpy(plainAB + 8, rndBRot, 8);
+
+    uint8_t encAB[16];
+    desfireDes3Cbc(key16, encRndB, true, plainAB, encAB, 16); // IV = encRndB (Chiffretext-Chaining)
+
+    uint8_t send2[17];
+    send2[0] = 0xAF;
+    memcpy(send2 + 1, encAB, 16);
+    respLen = sizeof(resp);
+    if (!nfc.inDataExchange(send2, 17, resp, &respLen) || respLen < 9 || resp[0] != 0x00) {
+      logMsg("desfireAuthDes3: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
+                    "vermutlich falscher Schluessel oder Karte hat Werksschluessel nicht mehr.\n",
+                    respLen > 0 ? resp[0] : 0xFF, respLen);
+      return false;
+    }
+    uint8_t encRndAResp[8];
+    memcpy(encRndAResp, resp + 1, 8);
+
+    uint8_t rndARot[8];
+    desfireDes3Cbc(key16, encAB + 8, false, encRndAResp, rndARot, 8); // IV = letzter von uns gesendeter Block
+
+    uint8_t rndAExpectedRot[8];
+    memcpy(rndAExpectedRot, rndA, 8);
+    desfireRotateLeft1(rndAExpectedRot, 8);
+
+    if (memcmp(rndARot, rndAExpectedRot, 8) == 0) {
+      // Sitzungsschluessel (2K3DES): RndA[0:4] + RndB[0:4] + RndA[4:8] + RndB[4:8]
+      memcpy(sessionKeyOut, rndA, 4);
+      memcpy(sessionKeyOut + 4, rndB, 4);
+      memcpy(sessionKeyOut + 8, rndA + 4, 4);
+      memcpy(sessionKeyOut + 12, rndB + 4, 4);
+      if (ivOut) memcpy(ivOut, encRndAResp, 8);
+      return true;
+    }
+
+    if (attempt < 3) {
+      logMsg("desfireAuthDes3: RndA-Rueckpruefung fehlgeschlagen, obwohl die Karte den Schluessel in "
+                    "Schritt 2 akzeptiert hat (Status 0x00) -- vermutlich Uebertragungsfehler, "
+                    "neuer Versuch %d/3.\n", attempt + 1);
+    } else {
+      logMsg("desfireAuthDes3: RndA-Rueckpruefung nach 3 Versuchen weiterhin fehlgeschlagen "
+                    "(Schluessel war laut Karten-Status 0x00 korrekt -- kein Schluesselproblem).");
+    }
   }
-  uint8_t encRndB[8];
-  memcpy(encRndB, resp + 1, 8);
-
-  uint8_t ivZero[8] = {0};
-  uint8_t rndB[8];
-  desfireDes3Cbc(key16, ivZero, false, encRndB, rndB, 8);
-
-  uint8_t rndA[8];
-  esp_fill_random(rndA, 8);
-
-  uint8_t rndBRot[8];
-  memcpy(rndBRot, rndB, 8);
-  desfireRotateLeft1(rndBRot, 8);
-
-  uint8_t plainAB[16];
-  memcpy(plainAB, rndA, 8);
-  memcpy(plainAB + 8, rndBRot, 8);
-
-  uint8_t encAB[16];
-  desfireDes3Cbc(key16, encRndB, true, plainAB, encAB, 16); // IV = encRndB (Chiffretext-Chaining)
-
-  uint8_t send2[17];
-  send2[0] = 0xAF;
-  memcpy(send2 + 1, encAB, 16);
-  respLen = sizeof(resp);
-  if (!nfc.inDataExchange(send2, 17, resp, &respLen) || respLen < 9 || resp[0] != 0x00) {
-    logMsg("desfireAuthDes3: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
-                  "vermutlich falscher Schluessel oder Karte hat Werksschluessel nicht mehr.\n",
-                  respLen > 0 ? resp[0] : 0xFF, respLen);
-    return false;
-  }
-  uint8_t encRndAResp[8];
-  memcpy(encRndAResp, resp + 1, 8);
-
-  uint8_t rndARot[8];
-  desfireDes3Cbc(key16, encAB + 8, false, encRndAResp, rndARot, 8); // IV = letzter von uns gesendeter Block
-
-  uint8_t rndAExpectedRot[8];
-  memcpy(rndAExpectedRot, rndA, 8);
-  desfireRotateLeft1(rndAExpectedRot, 8);
-
-  if (memcmp(rndARot, rndAExpectedRot, 8) != 0) {
-    logMsg("desfireAuthDes3: RndA-Rueckpruefung fehlgeschlagen (falscher Schluessel?).");
-    return false;
-  }
-
-  // Sitzungsschluessel (2K3DES): RndA[0:4] + RndB[0:4] + RndA[4:8] + RndB[4:8]
-  memcpy(sessionKeyOut, rndA, 4);
-  memcpy(sessionKeyOut + 4, rndB, 4);
-  memcpy(sessionKeyOut + 8, rndA + 4, 4);
-  memcpy(sessionKeyOut + 12, rndB + 4, 4);
-  if (ivOut) memcpy(ivOut, encRndAResp, 8);
-  return true;
+  return false;
 }
 
 // AES-128-Authentifizierung (Kommando 0xAA), gleiche Grundstruktur wie
@@ -570,67 +591,80 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
 // ivOut siehe Kommentar bei desfireAuthDes3() (hier 16 Byte statt 8).
 inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessionKeyOut[16],
                             uint8_t ivOut[16] = nullptr) {
-  uint8_t send1[2] = { 0xAA, keyNo };
-  uint8_t resp[40];
-  uint8_t respLen = sizeof(resp);
-  if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 17 || resp[0] != 0xAF) {
-    logMsg("desfireAuthAes: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
-                  respLen > 0 ? resp[0] : 0xFF, respLen);
-    return false;
+  // Retry-Logik siehe ausfuehrlicher Kommentar bei desfireAuthDes3() -- nur
+  // bei Status 0x00 in Schritt 2 UND fehlschlagender eigener RndA-
+  // Rueckpruefung (= Schluessel von der Karte bereits akzeptiert, vermutlich
+  // Uebertragungsfehler), NICHT bei Status-Fehlern (= echte Ablehnung).
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    uint8_t send1[2] = { 0xAA, keyNo };
+    uint8_t resp[40];
+    uint8_t respLen = sizeof(resp);
+    if (!nfc.inDataExchange(send1, 2, resp, &respLen) || respLen < 17 || resp[0] != 0xAF) {
+      logMsg("desfireAuthAes: Schritt 1 unerwartet (status=0x%02X, len=%u)\n",
+                    respLen > 0 ? resp[0] : 0xFF, respLen);
+      return false;
+    }
+    uint8_t encRndB[16];
+    memcpy(encRndB, resp + 1, 16);
+
+    uint8_t ivZero[16] = {0};
+    uint8_t rndB[16];
+    desfireAesCbc(key16, ivZero, false, encRndB, rndB, 16);
+
+    uint8_t rndA[16];
+    esp_fill_random(rndA, 16);
+
+    uint8_t rndBRot[16];
+    memcpy(rndBRot, rndB, 16);
+    desfireRotateLeft1(rndBRot, 16);
+
+    uint8_t plainAB[32];
+    memcpy(plainAB, rndA, 16);
+    memcpy(plainAB + 16, rndBRot, 16);
+
+    uint8_t encAB[32];
+    desfireAesCbc(key16, encRndB, true, plainAB, encAB, 32);
+
+    uint8_t send2[33];
+    send2[0] = 0xAF;
+    memcpy(send2 + 1, encAB, 32);
+    respLen = sizeof(resp);
+    if (!nfc.inDataExchange(send2, 33, resp, &respLen) || respLen < 17 || resp[0] != 0x00) {
+      logMsg("desfireAuthAes: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
+                    "vermutlich falscher Schluessel oder Karte hat Werksschluessel nicht mehr.\n",
+                    respLen > 0 ? resp[0] : 0xFF, respLen);
+      return false;
+    }
+    uint8_t encRndAResp[16];
+    memcpy(encRndAResp, resp + 1, 16);
+
+    uint8_t rndARot[16];
+    desfireAesCbc(key16, encAB + 16, false, encRndAResp, rndARot, 16);
+
+    uint8_t rndAExpectedRot[16];
+    memcpy(rndAExpectedRot, rndA, 16);
+    desfireRotateLeft1(rndAExpectedRot, 16);
+
+    if (memcmp(rndARot, rndAExpectedRot, 16) == 0) {
+      // Sitzungsschluessel (AES): RndA[0:4] + RndB[0:4] + RndA[12:16] + RndB[12:16]
+      memcpy(sessionKeyOut, rndA, 4);
+      memcpy(sessionKeyOut + 4, rndB, 4);
+      memcpy(sessionKeyOut + 8, rndA + 12, 4);
+      memcpy(sessionKeyOut + 12, rndB + 12, 4);
+      if (ivOut) memcpy(ivOut, encRndAResp, 16);
+      return true;
+    }
+
+    if (attempt < 3) {
+      logMsg("desfireAuthAes: RndA-Rueckpruefung fehlgeschlagen, obwohl die Karte den Schluessel in "
+                    "Schritt 2 akzeptiert hat (Status 0x00) -- vermutlich Uebertragungsfehler, "
+                    "neuer Versuch %d/3.\n", attempt + 1);
+    } else {
+      logMsg("desfireAuthAes: RndA-Rueckpruefung nach 3 Versuchen weiterhin fehlgeschlagen "
+                    "(Schluessel war laut Karten-Status 0x00 korrekt -- kein Schluesselproblem).");
+    }
   }
-  uint8_t encRndB[16];
-  memcpy(encRndB, resp + 1, 16);
-
-  uint8_t ivZero[16] = {0};
-  uint8_t rndB[16];
-  desfireAesCbc(key16, ivZero, false, encRndB, rndB, 16);
-
-  uint8_t rndA[16];
-  esp_fill_random(rndA, 16);
-
-  uint8_t rndBRot[16];
-  memcpy(rndBRot, rndB, 16);
-  desfireRotateLeft1(rndBRot, 16);
-
-  uint8_t plainAB[32];
-  memcpy(plainAB, rndA, 16);
-  memcpy(plainAB + 16, rndBRot, 16);
-
-  uint8_t encAB[32];
-  desfireAesCbc(key16, encRndB, true, plainAB, encAB, 32);
-
-  uint8_t send2[33];
-  send2[0] = 0xAF;
-  memcpy(send2 + 1, encAB, 32);
-  respLen = sizeof(resp);
-  if (!nfc.inDataExchange(send2, 33, resp, &respLen) || respLen < 17 || resp[0] != 0x00) {
-    logMsg("desfireAuthAes: Schritt 2 unerwartet (status=0x%02X, len=%u) -- "
-                  "vermutlich falscher Schluessel oder Karte hat Werksschluessel nicht mehr.\n",
-                  respLen > 0 ? resp[0] : 0xFF, respLen);
-    return false;
-  }
-  uint8_t encRndAResp[16];
-  memcpy(encRndAResp, resp + 1, 16);
-
-  uint8_t rndARot[16];
-  desfireAesCbc(key16, encAB + 16, false, encRndAResp, rndARot, 16);
-
-  uint8_t rndAExpectedRot[16];
-  memcpy(rndAExpectedRot, rndA, 16);
-  desfireRotateLeft1(rndAExpectedRot, 16);
-
-  if (memcmp(rndARot, rndAExpectedRot, 16) != 0) {
-    logMsg("desfireAuthAes: RndA-Rueckpruefung fehlgeschlagen (falscher Schluessel?).");
-    return false;
-  }
-
-  // Sitzungsschluessel (AES): RndA[0:4] + RndB[0:4] + RndA[12:16] + RndB[12:16]
-  memcpy(sessionKeyOut, rndA, 4);
-  memcpy(sessionKeyOut + 4, rndB, 4);
-  memcpy(sessionKeyOut + 8, rndA + 12, 4);
-  memcpy(sessionKeyOut + 12, rndB + 12, 4);
-  if (ivOut) memcpy(ivOut, encRndAResp, 16);
-  return true;
+  return false;
 }
 
 // Probiert Legacy-2K3DES zuerst (haeufiger bei DESFire EV0), dann AES
