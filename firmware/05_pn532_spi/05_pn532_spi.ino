@@ -72,29 +72,32 @@
 #include "backlight_buzzer.h"
 #include "rtc_pcf8563.h"
 
-// Log-Ringpuffer fuer das Log-Panel unter den Buttons (siehe drawLogPanel()
-// weiter unten) -- MUSS vor "#include desfire.h" stehen, da desfire.h
-// logMsg() statt Serial.print*() nutzt (Aufruf vor Definition kompiliert
-// bei PlatformIOs main.cpp -- anders als bei der Arduino-IDE, die
-// automatisch Prototypen generiert -- nicht, siehe Kommentar bei
-// desfireRunModalAction()). Nur die Textverwaltung + Serial-Ausgabe
-// stehen hier; das eigentliche Zeichnen (drawLogPanel(), braucht "canvas")
+// Log-Ringpuffer fuers Log-Fenster (siehe drawLogView() weiter unten,
+// LOG ANZEIGEN-Button) -- MUSS vor "#include desfire.h" stehen, da
+// desfire.h logMsg() statt Serial.print*() nutzt (Aufruf vor Definition
+// kompiliert bei PlatformIOs main.cpp -- anders als bei der Arduino-IDE,
+// die automatisch Prototypen generiert -- nicht, siehe Kommentar bei
+// desfireRunModalAction()). Nur die Textverwaltung + Serial-/SD-Ausgabe
+// stehen hier; das eigentliche Zeichnen (drawLogView(), braucht "canvas")
 // passiert separat, canvas ist an dieser Stelle noch nicht deklariert.
-const int LOG_LINES = 60;
+const int LOG_LINES = 200;
 const int LOG_LINE_LEN = 72;
 char logBuffer[LOG_LINES][LOG_LINE_LEN];
 int logHead = 0;       // naechster Schreibindex (Ringpuffer)
 int logCount = 0;      // Anzahl gueltiger Zeilen (bis LOG_LINES)
 int logScrollOffset = 0; // 0 = neueste Zeilen sichtbar (ganz "unten")
 // Erst true, wenn setup() fertig ist (Canvas/Panel initialisiert) --
-// logMsg() zeichnet das Log-Panel nur dann live nach, sonst wuerde ein
+// logMsg() zeichnet das Log-Fenster nur dann live nach, sonst wuerde ein
 // logMsg()-Aufruf waehrend setup() auf einen noch nicht existierenden
-// Framebuffer zugreifen. Vorwaertsdeklaration von drawLogPanel(): der
-// eigentliche Funktionskoerper (braucht "canvas") kommt erst viel
-// spaeter in der Datei, aber logMsg() -- ganz am Anfang der Datei, vor
-// "#include desfire.h" -- muss die Funktion schon aufrufen koennen.
+// Framebuffer zugreifen. Vorwaertsdeklarationen: die eigentlichen
+// Funktionskoerper (brauchen "canvas" bzw. sdMounted/rtcRead(), die erst
+// viel spaeter deklariert sind) kommen weiter unten in der Datei, aber
+// logMsg() -- ganz am Anfang der Datei, vor "#include desfire.h" -- muss
+// beide schon aufrufen koennen.
 bool displayReady = false;
-void drawLogPanel();
+bool logViewOpen = false;
+void drawLogView();
+void logToSd(const char *line);
 
 inline void logAdd(const char *line) {
   strncpy(logBuffer[logHead], line, LOG_LINE_LEN - 1);
@@ -105,8 +108,9 @@ inline void logAdd(const char *line) {
 
 // Ersetzt Serial.println()/Serial.printf() im gesamten Sketch + in
 // desfire.h -- schreibt weiterhin nach Serial (nur falls ein Monitor
-// verbunden ist, siehe frueherer Fix), UND haengt die Zeile an den
-// Log-Ringpuffer fuer das Display-Log-Panel an.
+// verbunden ist, siehe frueherer Fix), haengt die Zeile an den
+// Log-Ringpuffer fuers Log-Fenster an UND an die tagesaktuelle Log-Datei
+// auf der SD-Karte (siehe logToSd()).
 inline void logMsg(const char *fmt, ...) {
   char buf[128];
   va_list args;
@@ -119,7 +123,8 @@ inline void logMsg(const char *fmt, ...) {
   }
   if (Serial) Serial.println(buf);
   logAdd(buf);
-  if (displayReady) drawLogPanel();
+  logToSd(buf);
+  if (displayReady && logViewOpen) drawLogView();
 }
 
 #include "desfire.h"
@@ -150,7 +155,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.2";
+const char *FIRMWARE_VERSION = "2026-07-28.3";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -184,10 +189,9 @@ struct Button {
 // Layout fuer das gedrehte 480 (breit) x 800 (hoch) Koordinatensystem --
 // 2 Spalten, da mit den neuen DESFire-Schreibfunktionen viele Buttons
 // noetig sind. NTP-SYNC/WLAN-ESP-NOW-Umschalter/BACKLIGHT +/- sind auf
-// Nutzerwunsch in ein EINSTELLUNGEN-Untermenue gewandert (Platz fuer das
-// Log-Panel unten, siehe drawLogPanel()) -- nur noch EIN Button dafuer im
-// Hauptbildschirm, die restliche Flaeche gehoert den 7 DESFire-Buttons
-// direkt darunter.
+// Nutzerwunsch in ein EINSTELLUNGEN-Untermenue gewandert -- nur noch EIN
+// Button dafuer im Hauptbildschirm, dahinter die 7 DESFire-Buttons und
+// ganz unten LOG ANZEIGEN (oeffnet das Log-Fenster, siehe drawLogView()).
 const int BTN_COL_W = 216, BTN_H = 48, BTN_ROW_GAP = 60;
 const int BTN_LEFT_X = 16, BTN_RIGHT_X = 248;
 const int BTN_ROW1_Y = 310;
@@ -200,6 +204,7 @@ Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_
 Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
 Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
 Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
+Button btnLogOpen        = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, 448,       BTN_H, "LOG ANZEIGEN" };
 
 // EINSTELLUNGEN-Untermenue -- wiederverwendet dieselbe Fenstergeometrie
 // wie das DESFire-Aktions-Fenster (MODAL_X/Y/W/H, siehe unten), aber ohne
@@ -275,17 +280,21 @@ Button btnSettingsWifiToggle = { MODAL_X + MODAL_W - 16 - 190, MODAL_Y + 60, 190
 Button btnSettingsBrightUp   = { MODAL_X + 16, MODAL_Y + 60 + 76, 190, 60, "BACKLIGHT +" };
 Button btnSettingsBrightDn   = { MODAL_X + MODAL_W - 16 - 190, MODAL_Y + 60 + 76, 190, 60, "BACKLIGHT -" };
 
-// Log-Panel unter den Buttons (auf Nutzerwunsch) -- zeigt die letzten
-// Zeilen aus dem logMsg()-Ringpuffer, mit HOCH/RUNTER zum Scrollen durch
-// die Historie (bis zu LOG_LINES Zeilen zurueck). Bleibt AUCH sichtbar
-// (und aktualisiert live), waehrend das DESFire-Aktions-Fenster oder das
-// Einstellungen-Untermenue offen sind (beide enden bei y=600, das Panel
-// beginnt erst bei 610) -- genau dafuer gedacht: live mitverfolgen, was
-// waehrend einer Aktion passiert.
-const int LOG_PANEL_Y = 610, LOG_PANEL_H = 190, LOG_HEADER_H = 26;
-const int LOG_VISIBLE_LINES = 14;
-Button btnLogUp   = { 480 - 16 - 90, LOG_PANEL_Y + 2, 90, 22, "HOCH" };
-Button btnLogDown = { 480 - 16 - 90 - 8 - 90, LOG_PANEL_Y + 2, 90, 22, "RUNTER" };
+// Log-Fenster (auf Nutzerwunsch als EIGENES, groesseres Fenster statt
+// einer kleinen, schwer lesbaren Leiste unter den Buttons) -- fast
+// bildschirmfuellend, deutlich groessere Schrift als vorher (textSize 1.5
+// statt 1) und entsprechend mehr Zeilen gleichzeitig sichtbar. Wird ueber
+// den LOG-ANZEIGEN-Button auf dem Hauptbildschirm geoeffnet; waehrenddessen
+// pausiert der Hintergrund-Block genau wie beim DESFire-Fenster/
+// Einstellungen (siehe loop()).
+const int LOGVIEW_X = 8, LOGVIEW_Y = 8, LOGVIEW_W = 464, LOGVIEW_H = 784;
+const int LOGVIEW_HEADER_H = 40, LOGVIEW_FOOTER_H = 60;
+const int LOGVIEW_LINE_H = 16;
+const int LOGVIEW_VISIBLE_LINES = (LOGVIEW_H - LOGVIEW_HEADER_H - LOGVIEW_FOOTER_H) / LOGVIEW_LINE_H;
+const int LOGVIEW_BTN_Y = LOGVIEW_Y + LOGVIEW_H - 52;
+Button btnLogViewUp    = { LOGVIEW_X + 8, LOGVIEW_BTN_Y, 140, 44, "HOCH" };
+Button btnLogViewDown  = { LOGVIEW_X + 8 + 148, LOGVIEW_BTN_Y, 140, 44, "RUNTER" };
+Button btnLogViewClose = { LOGVIEW_X + 8 + 148 + 148, LOGVIEW_BTN_Y, 140, 44, "SCHLIESSEN" };
 
 uint8_t backlightPercent = 80;
 
@@ -438,6 +447,7 @@ void drawStaticParts() {
   drawButton(btnCredit, TFT_DARKGREY);
   drawButton(btnDebit, TFT_DARKGREY);
   drawButton(btnGetValue, TFT_DARKGREY);
+  drawButton(btnLogOpen, TFT_DARKGREY);
 }
 
 // Nur die SD-Statuszeile -- wird ausschliesslich bei einem tatsaechlichen
@@ -571,34 +581,38 @@ void redrawMainScreen() {
   updateReceivedInfo();
   updateUidInfo();
   updateWifiInfo();
-  drawLogPanel();
 }
 
-// Zeichnet das Log-Panel (Kopfzeile mit HOCH/RUNTER + die aktuell
-// sichtbaren Zeilen aus dem Ringpuffer, siehe logScrollOffset). Wird von
-// logMsg() automatisch nach jeder neuen Zeile aufgerufen (sobald
-// displayReady true ist) UND von den HOCH/RUNTER-Buttons.
-void drawLogPanel() {
-  canvas.fillRect(0, LOG_PANEL_Y, canvas.width(), LOG_PANEL_H, TFT_BLACK);
-  canvas.drawRect(0, LOG_PANEL_Y, canvas.width(), LOG_PANEL_H, TFT_DARKGREY);
+// Zeichnet das (fast bildschirmfuellende) Log-Fenster: Kopfzeile,
+// aktuell sichtbare Zeilen aus dem Ringpuffer (siehe logScrollOffset),
+// HOCH/RUNTER/SCHLIESSEN. Wird von logMsg() automatisch nach jeder neuen
+// Zeile aufgerufen, SOLANGE das Fenster gerade offen ist (logViewOpen) --
+// live mitlesbar, was waehrend einer Aktion passiert, ohne das Fenster
+// vorher schliessen zu muessen.
+void drawLogView() {
+  canvas.fillRoundRect(LOGVIEW_X, LOGVIEW_Y, LOGVIEW_W, LOGVIEW_H, 12, TFT_BLACK);
+  canvas.drawRoundRect(LOGVIEW_X, LOGVIEW_Y, LOGVIEW_W, LOGVIEW_H, 12, TFT_WHITE);
   canvas.setTextDatum(lgfx::top_left);
-  canvas.setTextSize(1);
-  canvas.setTextColor(TFT_LIGHTGREY);
-  canvas.setCursor(8, LOG_PANEL_Y + 5);
+  canvas.setTextSize(2);
+  canvas.setTextColor(TFT_WHITE);
+  canvas.setCursor(LOGVIEW_X + 12, LOGVIEW_Y + 8);
   canvas.printf("LOG (%d/%d)", logCount - logScrollOffset, logCount);
-  drawButton(btnLogUp, TFT_DARKGREY);
-  drawButton(btnLogDown, TFT_DARKGREY);
 
+  canvas.setTextSize(1.5);
   canvas.setTextColor(TFT_GREENYELLOW);
-  int textTop = LOG_PANEL_Y + LOG_HEADER_H;
+  int textTop = LOGVIEW_Y + LOGVIEW_HEADER_H;
   int endIdx = logCount - logScrollOffset; // exklusiv
-  int startIdx = endIdx - LOG_VISIBLE_LINES;
+  int startIdx = endIdx - LOGVIEW_VISIBLE_LINES;
   if (startIdx < 0) startIdx = 0;
   for (int i = startIdx; i < endIdx; i++) {
     int bufIdx = (logHead - logCount + i + LOG_LINES * 2) % LOG_LINES;
-    canvas.setCursor(8, textTop + (i - startIdx) * 12);
+    canvas.setCursor(LOGVIEW_X + 12, textTop + (i - startIdx) * LOGVIEW_LINE_H);
     canvas.print(logBuffer[bufIdx]);
   }
+
+  drawButton(btnLogViewUp, TFT_DARKGREY);
+  drawButton(btnLogViewDown, TFT_DARKGREY);
+  drawButton(btnLogViewClose, TFT_DARKGREY);
 }
 
 // EINSTELLUNGEN-Untermenue: NTP-SYNC/WLAN-Umschalter/Backlight, ohne
@@ -701,6 +715,29 @@ void formatTimestamp(char *buf, size_t bufLen) {
   } else {
     snprintf(buf, bufLen, "0000-00-00 00:00:00"); // RTC nicht lesbar
   }
+}
+
+// Haengt eine Log-Zeile mit RTC-Zeitstempel an eine tagesaktuelle Datei
+// auf der SD-Karte an (z. B. /log_2026-07-28.txt) -- neue Datei
+// automatisch bei Datumswechsel, da der Dateiname das Datum enthaelt.
+// No-op, solange keine SD-Karte gemountet ist (sdMounted, siehe
+// checkSdCard()) -- wird bei jedem logMsg()-Aufruf versucht, holt also
+// von selbst auf, sobald eine Karte eingesteckt wird.
+void logToSd(const char *line) {
+  if (!sdMounted) return;
+  RtcDateTime dt;
+  char path[40];
+  if (rtcRead(dt)) {
+    snprintf(path, sizeof(path), "/log_%04u-%02u-%02u.txt", dt.year, dt.month, dt.day);
+  } else {
+    snprintf(path, sizeof(path), "/log_unbekanntes_datum.txt");
+  }
+  File f = SD.open(path, FILE_APPEND);
+  if (!f) return;
+  char ts[32];
+  formatTimestamp(ts, sizeof(ts));
+  f.printf("%s  %s\n", ts, line);
+  f.close();
 }
 
 // Wird nur beim Uebergang "nicht gemountet -> gemountet" aufgerufen --
@@ -1392,7 +1429,7 @@ void loop() {
   // dass ein Tastendruck-Ergebnis fast sofort wieder ueberschrieben
   // wurde -- mit eigenem Fenster ist das jetzt strukturell ausgeschlossen,
   // nicht mehr nur durch eine Wartezeit kaschiert.
-  if (desfireModalState == MODAL_CLOSED && !settingsOpen) {
+  if (desfireModalState == MODAL_CLOSED && !settingsOpen && !logViewOpen) {
     // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/geloggt -- siehe
     // Kommentar bei recvPending oben.
     if (recvPending) {
@@ -1464,21 +1501,25 @@ void loop() {
   if (touchStandaloneGetXY(&x, &y)) {
     // Rotations-Debug-Ausgabe (roh vs. gedreht) entfernt -- Rotation ist
     // an echter Hardware bestaetigt korrekt (siehe Fotos), und die Zeile
-    // haette bei jedem Touch-Poll das neue Log-Panel geflutet.
+    // haette bei jedem Touch-Poll das Log-Fenster geflutet.
     rotateTouchToLogical(x, y);
 
-    // Log-Panel-Scrollen ist IMMER erreichbar, unabhaengig davon, ob
-    // gerade das DESFire-Fenster oder die Einstellungen offen sind (siehe
-    // Kommentar bei LOG_PANEL_Y oben -- soll live mitlesbar bleiben).
-    if (inside(btnLogUp, x, y)) {
-      int maxOffset = logCount > LOG_VISIBLE_LINES ? logCount - LOG_VISIBLE_LINES : 0;
-      if (logScrollOffset < maxOffset) logScrollOffset++;
-      drawLogPanel();
-      delay(150);
-      return;
-    } else if (inside(btnLogDown, x, y)) {
-      if (logScrollOffset > 0) logScrollOffset--;
-      drawLogPanel();
+    // Log-Fenster: eigener Zustand wie das DESFire-Fenster/Einstellungen
+    // -- solange offen, werden AUSSCHLIESSLICH dessen eigene Buttons
+    // ausgewertet.
+    if (logViewOpen) {
+      if (inside(btnLogViewUp, x, y)) {
+        int maxOffset = logCount > LOGVIEW_VISIBLE_LINES ? logCount - LOGVIEW_VISIBLE_LINES : 0;
+        if (logScrollOffset < maxOffset) logScrollOffset++;
+        drawLogView();
+      } else if (inside(btnLogViewDown, x, y)) {
+        if (logScrollOffset > 0) logScrollOffset--;
+        drawLogView();
+      } else if (inside(btnLogViewClose, x, y)) {
+        buzzerBeep(80);
+        logViewOpen = false;
+        redrawMainScreen();
+      }
       delay(150);
       return;
     }
@@ -1569,6 +1610,11 @@ void loop() {
       buzzerBeep(80);
       settingsOpen = true;
       drawSettingsMenu();
+    } else if (inside(btnLogOpen, x, y)) {
+      buzzerBeep(80);
+      logScrollOffset = 0; // beim Oeffnen immer die neuesten Zeilen zeigen
+      logViewOpen = true;
+      drawLogView();
     } else if (inside(btnSetMasterKey, x, y)) {
       buzzerBeep(80);
       desfireModalAction = DESFIRE_ACTION_SET_MASTER_KEY;

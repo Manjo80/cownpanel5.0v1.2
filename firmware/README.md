@@ -476,29 +476,40 @@ im Kryptogramm, hier nirgends gebraucht).
 hardcoded), allgemeiner ChangeKey für fremde Schlüssel, mehr als 1
 Schlüssel/Applikation.
 
-## 11. Log-Panel + EINSTELLUNGEN-Untermenü (Stage 5)
+## 11. Log-Fenster + SD-Tageslog + EINSTELLUNGEN-Untermenü (Stage 5)
 
-Auf Nutzerwunsch zeigt Stage 5 unter den Buttons ein scrollbares Log-Panel
-(schwarzer Kasten, `drawLogPanel()`), das dieselben Meldungen anzeigt, die
-sonst nur über den Serial Monitor sichtbar waren — direkt am Panel
-ablesbar, ohne PC. Zwei Buttons **HOCH**/**RUNTER** blättern durch die
-letzten `LOG_LINES` (60) Zeilen; das Panel aktualisiert sich automatisch
-bei jeder neuen Meldung und bleibt auch sichtbar, während das
-DESFire-Aktions-Fenster oder EINSTELLUNGEN offen sind (beide enden bei
-y=600, das Panel beginnt bei 610) — genau dafür gedacht, live
-mitzuverfolgen, was während einer Aktion passiert.
+Auf Nutzerwunsch gibt es jetzt zwei Wege, denselben Log-Inhalt zu lesen,
+statt nur über den Serial Monitor:
+
+**Log-Fenster (`LOG ANZEIGEN`-Button, `drawLogView()`):** Ein fast
+bildschirmfüllendes, eigenes Fenster (kein permanent sichtbares Panel
+mehr — das war zu klein/schwer lesbar) mit deutlich größerer Schrift
+(`textSize(1.5)` statt `1`) und entsprechend mehr Platz pro Zeile. **HOCH**/
+**RUNTER** blättern durch die letzten `LOG_LINES` (200) Zeilen im
+Ringpuffer, **SCHLIESSEN** kehrt zum Hauptbildschirm zurück. Aktualisiert
+sich automatisch bei jeder neuen Meldung, solange es offen ist (live
+mitlesbar während einer laufenden Aktion).
+
+**SD-Tageslog (`logToSd()`):** Jede Log-Zeile landet zusätzlich — mit
+RTC-Zeitstempel — in einer tagesaktuellen Datei auf der SD-Karte, z. B.
+`/log_2026-07-28.txt`. Da der Dateiname das Datum enthält, entsteht beim
+Datumswechsel automatisch eine neue Datei, ohne eigene Rotationslogik.
+No-op, solange keine Karte gemountet ist; sobald eine eingesteckt wird,
+protokolliert `checkSdCard()`s nächster Durchlauf ab da weiter.
 
 **Umsetzung:** `logMsg(fmt, ...)` (in `05_pn532_spi.ino`/`main.cpp`, noch
 vor `#include "desfire.h"` definiert) ersetzt praktisch jeden bisherigen
 `Serial.println()`/`Serial.printf()`-Aufruf im gesamten Sketch **und** in
 `desfire.h` — schreibt weiterhin nach Serial (nur falls ein Monitor
-verbunden ist) und hängt die Zeile zusätzlich an einen Ringpuffer an.
-Da `desfire.h` `logMsg()` schon sehr früh in der Datei braucht, `canvas`
-(fürs eigentliche Zeichnen) zu dem Zeitpunkt aber noch nicht deklariert
-ist, gibt es dafür eine Vorwärtsdeklaration (`void drawLogPanel();`) ganz
-am Anfang der Datei — der tatsächliche Funktionskörper folgt viel später.
+verbunden ist), hängt die Zeile an den Ringpuffer **und** an `logToSd()`
+an. Da `desfire.h` `logMsg()` schon sehr früh in der Datei braucht,
+`canvas`/`sdMounted`/`formatTimestamp()` zu dem Zeitpunkt aber noch nicht
+deklariert sind, gibt es dafür Vorwärtsdeklarationen (`void
+drawLogView();` und `void logToSd(const char *line);`) ganz am Anfang der
+Datei — die tatsächlichen Funktionskörper folgen viel später (siehe auch
+Kommentar bei `desfireRunModalAction()` zum selben Thema).
 
-**Platz geschaffen für das Log-Panel:** NTP-SYNC, der WLAN/ESP-NOW-
+**Platz geschaffen fürs Log-Fenster:** NTP-SYNC, der WLAN/ESP-NOW-
 Umschalter und BACKLIGHT +/- sind aus dem Hauptbildschirm in ein
 **EINSTELLUNGEN**-Untermenü gewandert (ein Button auf dem Hauptbildschirm
 öffnet es). Anders als beim DESFire-Aktions-Fenster gibt es dort **keinen**
