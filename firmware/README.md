@@ -326,15 +326,19 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
 
 ## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
 
-Auf Nutzerwunsch geht Stage 5 über reines UID-Lesen hinaus und versucht bei
-jeder erkannten Karte einen vollständigen DESFire-Lesevorgang mit dem
-**Werks-Default-Schlüssel** (16 Nullbytes):
+Auf Nutzerwunsch geht Stage 5 über reines UID-Lesen hinaus und führt einen
+vollständigen DESFire-Lesevorgang mit dem **Werks-Default-Schlüssel**
+(16 Nullbytes) durch. **Ausgelöst über den KARTEN-INFO-Button** (siehe
+Abschnitt 10) — läuft NICHT mehr automatisch im Hintergrund bei jeder
+erkannten Karte (Nutzerwunsch: der PN532 soll nur nach einem bewussten
+Tastendruck aktiv scannen, nicht durchgehend):
 
 1. `GetVersion` (Hardware-/Software-Version, UID, Batch-Nummer, Produktionswoche/-jahr)
 2. `GetApplicationIDs` (Liste aller Anwendungen/AIDs auf der Karte)
 3. Pro Anwendung: `SelectApplication`, dann Authentifizierung mit
-   Default-Schlüssel — erst Legacy-2K3DES (Kommando `0x0A`), bei
-   Fehlschlag AES-128 (Kommando `0xAA`)
+   Default-Schlüssel — erst 2K3DES (Kommando `0x1A`, siehe Abschnitt 12
+   zur Begründung, warum nicht `0x0A`), bei Fehlschlag AES-128 (Kommando
+   `0xAA`)
 4. Bei erfolgreicher Authentifizierung: `GetFileIDs`, pro Datei
    `GetFileSettings` (Typ, Kommunikationsmodus, Größe) und — wo möglich —
    `ReadData`/`ReadRecords`
@@ -427,14 +431,15 @@ oder drei Buttons nebeneinander ist.
   tatsächlichen LovyanGFX-Konvention passt — bitte melden, dann wird die
   Formel korrigiert.
 
-## 10. DESFire-Schreibfunktionen (Stage 5, 7 zusätzliche Buttons)
+## 10. DESFire-Schreibfunktionen (Stage 5, 8 Aktions-Buttons)
 
 Auf Nutzerwunsch kann Stage 5 jetzt auch schreibend auf eine DESFire-Karte
 zugreifen: eigene Applikation mit Guthaben-Datei anlegen/löschen,
-Guthaben buchen/nutzen/abfragen, und den Werks-Default-Schlüssel gegen
-einen eigenen Schlüssel tauschen (und zurück). Alle 7 Buttons rechts
-unten im Hochformat-Layout (siehe Abschnitt 9), alle Parameter fest im
-Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
+Guthaben buchen/nutzen/abfragen, Karteninformationen anzeigen, und den
+Werks-Default-Schlüssel gegen einen eigenen Schlüssel tauschen (und
+zurück). Alle 8 Buttons rechts unten im Hochformat-Layout (siehe
+Abschnitt 9), alle Parameter fest im Code (`05_pn532_spi.ino`), da das
+Panel keine Tastatur hat:
 
 | Konstante | Wert | Bedeutung |
 |---|---|---|
@@ -444,22 +449,32 @@ Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
 | `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
 | `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
 
-**Aktions-Fenster statt Sofortausführung:** Jeder der 7 Buttons öffnet ein
-eigenes Fenster (`DesfireModalState`, `drawDesfireModalConfirm()`/
-`drawDesfireModalResult()`) — erst eine Bestätigung mit **ABBRECHEN**/
-**AUSFÜHREN**, nach der Ausführung das Ergebnis mit **SCHLIESSEN**-Button.
-Grund: der automatische Lese-Scan (Abschnitt 8) lief anfangs weiter im
-Hintergrund und überschrieb das Ergebnis eines gerade gedrückten Buttons
-fast sofort mit seiner eigenen generischen Zusammenfassung — sichtbar war
-dann nur noch der Piepton, ohne erkennbaren Effekt. Ein erster Fix (Auto-
-Scan für einige Sekunden nach jedem Tastendruck pausieren) kaschierte das
-nur; jetzt pausiert der komplette Hintergrund-Block (siehe `loop()`) für
-die gesamte Dauer, in der das Fenster offen ist — keine Race Condition
-mehr, das PN532-Modul bleibt dabei durchgehend aktiv, nur eben ohne
-Hintergrund-Polling währenddessen.
+**Aktions-Fenster mit aktivem Warten auf die Karte (Nutzerwunsch,
+mehrfach überarbeitet):** Jeder Aktions-Button öffnet ein eigenes Fenster
+(`DesfireModalState`). Für die kritischen/schreibenden Aktionen erst eine
+Bestätigung mit **ABBRECHEN**/**AUSFÜHREN** (`drawDesfireModalConfirm()`);
+für das rein lesende KARTEN INFO entfällt dieser Schritt. Danach wechselt
+das Fenster in einen **aktiven Wartezustand** (`MODAL_WAITING_CARD`,
+`drawDesfireModalWaiting()`): "Karte jetzt auflegen" wird angezeigt, der
+PN532 wird jetzt erst periodisch abgefragt (vorher lief das Polling
+durchgehend im Hintergrund, auch ohne dass irgendeine Aktion gewünscht
+war — auf Nutzerwunsch entfernt, das Modul soll nicht mehr staendig aktiv
+scannen). Sobald eine Karte erkannt wird, wartet der Code eine kurze
+Beruhigungspause (`DESFIRE_CARD_SETTLE_MS`, 300 ms) und führt dann
+automatisch die Aktion aus — kein zusätzlicher Tastendruck nötig. Danach
+das Ergebnis mit **SCHLIESSEN**-Button (`drawDesfireModalResult()`).
+Gepiept wird ausschließlich ganz am Ende (`desfireOpFinish()`), nie schon
+beim bloßen Erkennen der Karte.
 
 **Buttons:**
 
+- **KARTEN INFO** — rein lesend, kein Bestätigungsschritt: liest UID +
+  DESFire-Kurzinfo der aufgelegten Karte (`desfireDeepRead()`, wie zuvor
+  automatisch im Hintergrund, jetzt bewusst ausgelöst). Ergebnisfenster
+  zeigt UID-Zeile + Kurzzusammenfassung; Details weiterhin in
+  `/desfire_log.txt`. `drawDesfireModalResult()` ist bewusst so gebaut,
+  dass sich hier später leicht weitere Karteninformationen ergänzen
+  lassen (ein zusätzlicher `printWrapped()`-Aufruf pro neuer Zeile).
 - **MASTER-PW SETZEN / AUF STANDARD** — authentifiziert mit dem jeweils
   *aktuell gültigen* Schlüssel (`desfireAuthEitherKey()` probiert erst
   Default, dann Custom) und ändert Key 0 per `ChangeKey` auf den anderen
@@ -473,10 +488,13 @@ Hintergrund-Polling währenddessen.
 - **APP LOESCHEN** — `DeleteApplication(CUSTOM_AID)`, muss laut
   DESFire-Vorgabe auf PICC-Ebene authentifiziert aufgerufen werden.
 - **GUTHABEN BUCHEN / NUTZEN** — `Credit`/`Debit` + `CommitTransaction`
-  (ohne Commit werden Buchungen beim nächsten Kommando verworfen). Bei
-  "NUTZEN": die **Karte selbst** lehnt ab, wenn das Guthaben dadurch unter
-  `VALUE_LOWER_LIMIT` (0) fallen würde (Status meist `BOUNDARY_ERROR`) —
-  keine eigene Guthaben-Prüfung nötig/implementiert.
+  (ohne Commit werden Buchungen beim nächsten Kommando verworfen), danach
+  automatisch `GetValue` für den neuen Kontostand (Nutzerwunsch) —
+  Ergebnisfenster zeigt z. B. "+100 gebucht, neuer Stand: 300" statt nur
+  "gebucht". Bei "NUTZEN": die **Karte selbst** lehnt ab, wenn das
+  Guthaben dadurch unter `VALUE_LOWER_LIMIT` (0) fallen würde (Status
+  meist `BOUNDARY_ERROR`) — keine eigene Guthaben-Prüfung nötig/
+  implementiert.
 - **GUTHABEN ABFRAGEN** — `GetValue`, Ergebnis in der Zusammenfassungszeile.
 
 **Sicherheitshinweis ChangeKey (bitte lesen, bevor an einer echten Karte
