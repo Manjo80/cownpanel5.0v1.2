@@ -1,6 +1,12 @@
 // Stage 5 -- PN532 NFC ueber Software-SPI, Erweiterung von Stage 4
 // Board: Elecrow CrowPanel Advance 5.0 (DIS02050A), ESP32-S3-WROOM-1 N16R8
 //
+// FIRMWARE_VERSION (siehe unten, wird auch auf dem Display angezeigt) wird
+// bei JEDER inhaltlichen Aenderung an dieser Datei hochgezaehlt -- damit
+// nach einem "git pull" + Neu-Flashen auf einen Blick auf dem Panel
+// erkennbar ist, ob wirklich die neueste Version laeuft (ohne Serial
+// Monitor oder Diff noetig).
+//
 // Baut auf Stage 4 auf: SD-Karten-Status, RTC-Anzeige und der komplette
 // WLAN/ESP-NOW-Status (inkl. Log-Datei) bleiben erhalten (STELLEN/BEEP
 // sind auf Nutzerwunsch entfallen, siehe Button-Layout unten). Neu dazu
@@ -40,13 +46,13 @@
 //   1. In Adafruit_PN532.h:  #define PN532_PACKBUFFSIZ 64   ->  255
 //   2. In Adafruit_PN532.cpp, inDataExchange(): Timeout 1000 -> 5000 (ms)
 //
+#include <Arduino.h>
 // Kartenerkennung + -aktivierung laeuft NUR ueber inListPassiveTarget()
 // (kein zusaetzlicher readPassiveTargetID()-Aufruf davor/danach) -- beide
 // senden dasselbe native InListPassiveTarget-Kommando (0x4A), und ein
 // zweiter Aufruf direkt nach einem bereits erfolgreichen ersten schlaegt an
 // echter Hardware regelmaessig fehl, weil die Karte dann schon aktiviert
 // ist und auf eine erneute Anticollision/Select-Sequenz nicht mehr
-#include <Arduino.h>
 // antwortet (siehe README.md). Die UID kommt stattdessen aus
 // desfireGetVersion() (siehe desfireDeepRead()).
 
@@ -88,6 +94,12 @@
 // bereitgestellten PSRAM-Framebuffer (esp_lcd_panel_rgb mit Bounce Buffer,
 // siehe rgb_panel.h).
 LGFX_Sprite canvas;
+
+// Wird bei jeder inhaltlichen Aenderung an dieser Datei hochgezaehlt und
+// steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
+// einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
+// neueste Version laeuft.
+const char *FIRMWARE_VERSION = "2026-07-28.1";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -155,6 +167,49 @@ const int32_t VALUE_LOWER_LIMIT = 0;       // Karte lehnt Debit unter 0 selbst a
 const int32_t VALUE_UPPER_LIMIT = 1000000; // willkuerliche, aber grosszuegige Obergrenze
 const int32_t CREDIT_DEBIT_AMOUNT = 100;   // fester Betrag pro Tastendruck, leicht aenderbar
 
+// DESFire-Aktions-Fenster: jeder der 7 DESFire-Buttons oeffnet jetzt ein
+// eigenes Fenster (auf Nutzerwunsch) statt die Aktion sofort auszufuehren
+// -- erst eine Bestaetigung (ABBRECHEN/AUSFUEHREN), danach das Ergebnis
+// mit SCHLIESSEN-Button. Solange dieses Fenster offen ist, pausiert der
+// automatische Lese-Scan KOMPLETT (siehe loop()) -- kein Wettlauf mehr
+// zwischen Auto-Scan und manueller Aktion um dieselbe Anzeige/denselben
+// PN532. Das PN532-Modul selbst bleibt dabei jederzeit aktiv (es wird nur
+// eben nicht mehr im Hintergrund automatisch abgefragt).
+enum DesfireModalState { MODAL_CLOSED, MODAL_CONFIRM, MODAL_RESULT };
+DesfireModalState desfireModalState = MODAL_CLOSED;
+
+enum DesfireAction {
+  DESFIRE_ACTION_SET_MASTER_KEY = 0,
+  DESFIRE_ACTION_RESET_MASTER_KEY,
+  DESFIRE_ACTION_CREATE_APP,
+  DESFIRE_ACTION_DELETE_APP,
+  DESFIRE_ACTION_CREDIT,
+  DESFIRE_ACTION_DEBIT,
+  DESFIRE_ACTION_GET_VALUE,
+  DESFIRE_ACTION_COUNT
+};
+DesfireAction desfireModalAction = DESFIRE_ACTION_GET_VALUE;
+
+struct DesfireActionInfo {
+  const char *title;
+  const char *description;
+};
+const DesfireActionInfo DESFIRE_ACTIONS[DESFIRE_ACTION_COUNT] = {
+  { "MASTER-PW SETZEN",  "Setzt Key 0 (PICC-Ebene + eigene App, falls vorhanden) auf den Custom-Schluessel." },
+  { "AUF STANDARD",      "Setzt Key 0 (PICC-Ebene + eigene App) zurueck auf den Werks-Default (16 Nullbytes)." },
+  { "APP ERSTELLEN",     "Legt Applikation 0x123456 mit Guthaben-Datei an (Start 0)." },
+  { "APP LOESCHEN",      "Loescht Applikation 0x123456 UNWIDERRUFLICH." },
+  { "GUTHABEN BUCHEN",   "Bucht +100 auf das Guthaben." },
+  { "GUTHABEN NUTZEN",   "Zieht -100 vom Guthaben ab (falls genug vorhanden)." },
+  { "GUTHABEN ABFRAGEN", "Liest den aktuellen Guthabenstand." },
+};
+
+const int MODAL_X = 24, MODAL_Y = 140, MODAL_W = 432, MODAL_H = 460;
+const int MODAL_BTN_Y = MODAL_Y + MODAL_H - 66;
+Button btnModalCancel  = { MODAL_X + 16, MODAL_BTN_Y, 190, 50, "ABBRECHEN" };
+Button btnModalConfirm = { MODAL_X + MODAL_W - 16 - 190, MODAL_BTN_Y, 190, 50, "AUSFUEHREN" };
+Button btnModalClose   = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "SCHLIESSEN" };
+
 uint8_t backlightPercent = 80;
 
 const uint16_t bgColors[] = { TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_BLACK };
@@ -182,15 +237,6 @@ const uint32_t RTC_UPDATE_INTERVAL_MS = 1000;
 const uint32_t SD_POLL_INTERVAL_MS = 2000;
 const uint32_t PN532_POLL_INTERVAL_MS = 300;
 const uint32_t PN532_DEBOUNCE_MS = 1000;
-// Solange < MANUAL_OP_DISPLAY_HOLD_MS seit dem letzten manuellen DESFire-
-// Button (siehe desfireOpFinish()) vergangen sind, pausiert der
-// automatische Lese-Scan komplett -- sonst ueberschrieb dessen naechster
-// Durchlauf (alle ~300ms+PN532_DEBOUNCE_MS) das gerade erst gesetzte
-// Ergebnis des Buttons fast sofort wieder mit der generischen
-// Lese-Zusammenfassung, ohne dass ueberhaupt sichtbar wurde, dass der
-// Button etwas bewirkt hat.
-const uint32_t MANUAL_OP_DISPLAY_HOLD_MS = 4000;
-uint32_t lastManualOpMs = 0;
 
 uint8_t broadcastAddr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -303,7 +349,8 @@ void drawStaticParts() {
 
   canvas.setCursor(12, 56);
   canvas.print("Eigene MAC: ");
-  canvas.println(WiFi.macAddress());
+  canvas.print(WiFi.macAddress());
+  canvas.printf("  v%s", FIRMWARE_VERSION);
 
   drawButton(btnNtpSync, TFT_DARKGREY);
   drawButton(btnWifiToggle, TFT_DARKGREY);
@@ -434,6 +481,93 @@ void updateWifiInfo() {
   canvas.setTextColor(wifiIpColor);
   canvas.setCursor(12, WIFI_INFO_Y + 2);
   canvas.print(wifiIpMsg);
+}
+
+// Zeichnet den kompletten Hauptbildschirm neu -- gebraucht beim Tap auf
+// freie Flaeche (Hintergrundfarbe wechseln) UND beim Schliessen/Abbrechen
+// eines DESFire-Aktions-Fensters (das den Hauptbildschirm komplett
+// ueberdeckt hatte).
+void redrawMainScreen() {
+  drawStaticParts();
+  updateSdInfo();
+  updateRtcInfo();
+  updatePn532Info();
+  updateSendInfo();
+  updateReceivedInfo();
+  updateUidInfo();
+  updateWifiInfo();
+}
+
+// Gibt Text zeilenweise aus, bricht zwischen Woertern um, damit jede
+// Zeile innerhalb von maxWidthPx bleibt (canvas.textWidth() misst bei der
+// AKTUELL per setTextSize()/setTextColor() usw. gesetzten Textgroesse --
+// muss also VOR dem Aufruf gesetzt sein). Gebraucht fuer die
+// Aktionsbeschreibungen im DESFire-Bestaetigungsfenster, die bei
+// textSize(1.5) sonst weit ueber den 432px breiten Fensterrand
+// hinauslaufen wuerden. Gibt die Anzahl gezeichneter Zeilen zurueck.
+int printWrapped(const char *text, int x, int y, int maxWidthPx, int lineHeight) {
+  char buf[160];
+  strncpy(buf, text, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = 0;
+  char line[160] = "";
+  int lineCount = 0;
+  char *word = strtok(buf, " ");
+  while (word) {
+    char candidate[160];
+    if (line[0] == 0) snprintf(candidate, sizeof(candidate), "%s", word);
+    else snprintf(candidate, sizeof(candidate), "%s %s", line, word);
+    if (line[0] != 0 && canvas.textWidth(candidate) > maxWidthPx) {
+      canvas.setCursor(x, y + lineCount * lineHeight);
+      canvas.println(line);
+      lineCount++;
+      snprintf(line, sizeof(line), "%s", word);
+    } else {
+      snprintf(line, sizeof(line), "%s", candidate);
+    }
+    word = strtok(nullptr, " ");
+  }
+  if (line[0] != 0) {
+    canvas.setCursor(x, y + lineCount * lineHeight);
+    canvas.println(line);
+    lineCount++;
+  }
+  return lineCount;
+}
+
+// Rahmen + Titel des DESFire-Aktions-Fensters -- gemeinsame Basis fuer
+// Bestaetigungs- und Ergebnis-Ansicht (siehe DesfireModalState oben).
+void drawDesfireModalFrame() {
+  canvas.fillRoundRect(MODAL_X, MODAL_Y, MODAL_W, MODAL_H, 12, TFT_NAVY);
+  canvas.drawRoundRect(MODAL_X, MODAL_Y, MODAL_W, MODAL_H, 12, TFT_WHITE);
+  canvas.setTextDatum(lgfx::top_left);
+  canvas.setTextColor(TFT_WHITE);
+  canvas.setTextSize(2);
+  canvas.setCursor(MODAL_X + 16, MODAL_Y + 16);
+  canvas.println(DESFIRE_ACTIONS[desfireModalAction].title);
+}
+
+// Bestaetigungs-Ansicht: Beschreibung + ABBRECHEN/AUSFUEHREN.
+void drawDesfireModalConfirm() {
+  drawDesfireModalFrame();
+  canvas.setTextSize(1.5);
+  canvas.setTextColor(TFT_LIGHTGREY);
+  int descLines = printWrapped(DESFIRE_ACTIONS[desfireModalAction].description,
+                                MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
+  canvas.setTextColor(TFT_YELLOW);
+  canvas.setCursor(MODAL_X + 16, MODAL_Y + 60 + descLines * 20 + 16);
+  canvas.println("Karte auflegen, dann AUSFUEHREN tippen.");
+  drawButton(btnModalCancel, TFT_DARKGREY);
+  drawButton(btnModalConfirm, TFT_DARKGREY);
+}
+
+// Ergebnis-Ansicht: Ergebnistext (desfireSummaryMsg, von der jeweiligen
+// desfireOpXxx()-Funktion gesetzt) + SCHLIESSEN.
+void drawDesfireModalResult() {
+  drawDesfireModalFrame();
+  canvas.setTextSize(1.5);
+  canvas.setTextColor(TFT_GREENYELLOW);
+  printWrapped(desfireSummaryMsg, MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
+  drawButton(btnModalClose, TFT_DARKGREY);
 }
 
 // Aktuelle RTC-Zeit als "YYYY-MM-DD hh:mm:ss" -- fuer Log-Zeitstempel.
@@ -716,17 +850,17 @@ bool desfireOpBegin() {
   return true;
 }
 
-// Gemeinsamer Abschluss aller 7 Op-Funktionen: zeichnet das Ergebnis,
-// piept (kurz bei Erfolg, lang bei Fehlschlag) und -- WICHTIG -- haelt den
-// automatischen Lese-Scan fuer MANUAL_OP_DISPLAY_HOLD_MS an (siehe
-// Kommentar dort), damit das Ergebnis tatsaechlich sichtbar bleibt, statt
-// sofort vom naechsten Auto-Scan-Durchlauf ueberschrieben zu werden.
+// Gemeinsamer Abschluss aller 7 Op-Funktionen: setzt den Piepton (kurz bei
+// Erfolg, lang bei Fehlschlag) und den Auto-Scan-Entprellzeitpunkt.
+// updateUidInfo() bleibt hier (zeichnet zwar nur auf den -- waehrend des
+// DESFire-Aktions-Fensters unsichtbaren -- Hauptbildschirm, schadet aber
+// nicht und sorgt dafuer, dass der Hauptbildschirm nach dem Schliessen des
+// Fensters bereits den richtigen Stand hat). Das eigentliche Ergebnis
+// zeigt loop() im Fenster selbst (drawDesfireModalResult()).
 void desfireOpFinish(bool ok) {
   updateUidInfo();
   buzzerBeep(ok ? 80 : 300);
-  uint32_t now = millis();
-  lastUidReadMs = now;
-  lastManualOpMs = now;
+  lastUidReadMs = millis();
 }
 
 // "MASTER-PW SETZEN": authentifiziert mit dem AKTUELL gueltigen Schluessel
@@ -961,6 +1095,25 @@ void desfireOpGetValue() {
   desfireOpFinish(ok);
 }
 
+// Fuehrt die zum aktuell gewaehlten Fenster gehoerende DESFire-Aktion aus
+// (siehe DesfireModalState/loop()) -- muss NACH den desfireOpXxx()-
+// Funktionen stehen: anders als beim .ino-Build (Arduino-IDE, automatische
+// Funktions-Prototypen) generiert PlatformIOs main.cpp-Build KEINE
+// Prototypen, Vorwaertsreferenzen auf spaeter im File definierte
+// Funktionen wuerden dort nicht kompilieren.
+void desfireRunModalAction(DesfireAction action) {
+  switch (action) {
+    case DESFIRE_ACTION_SET_MASTER_KEY:   desfireOpSetMasterKey(); break;
+    case DESFIRE_ACTION_RESET_MASTER_KEY: desfireOpResetMasterKey(); break;
+    case DESFIRE_ACTION_CREATE_APP:       desfireOpCreateApp(); break;
+    case DESFIRE_ACTION_DELETE_APP:       desfireOpDeleteApp(); break;
+    case DESFIRE_ACTION_CREDIT:           desfireOpCredit(); break;
+    case DESFIRE_ACTION_DEBIT:            desfireOpDebit(); break;
+    case DESFIRE_ACTION_GET_VALUE:        desfireOpGetValue(); break;
+    default: break;
+  }
+}
+
 // Core-Versions-abhaengig (siehe README.md Abschnitt 15, Punkt 7).
 void onDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
   lastSendOk = (status == ESP_NOW_SEND_SUCCESS);
@@ -1112,73 +1265,83 @@ uint32_t lastRtcDrawMs = 0;
 uint32_t lastSdPollMs = 0;
 
 void loop() {
-  // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/geloggt -- siehe
-  // Kommentar bei recvPending oben.
-  if (recvPending) {
-    recvPending = false;
-    updateReceivedInfo();
-    logReceivedMessage();
-  }
-
   uint32_t now = millis();
-  if (now - lastRtcDrawMs >= RTC_UPDATE_INTERVAL_MS) {
-    lastRtcDrawMs = now;
-    updateRtcInfo();
-  }
 
-  if (now - lastSdPollMs >= SD_POLL_INTERVAL_MS) {
-    lastSdPollMs = now;
-    checkSdCard();
-  }
+  // Der komplette Hintergrund-Block (Uhrzeit, SD-Polling, WLAN-Polling,
+  // ESP-NOW-Senden, automatischer Lese-Scan) pausiert KOMPLETT, solange
+  // ein DESFire-Aktions-Fenster offen ist (siehe DesfireModalState) --
+  // sonst wuerde jeder dieser periodischen Redraws Teile des
+  // Hauptbildschirms unter dem Fenster neu zeichnen, was durch das
+  // Fenster "durchscheinen" wuerde (alles ein einziger flacher
+  // Framebuffer ohne echte Fenster-Ueberlagerung/Z-Ordnung). Der
+  // automatische Lese-Scan war zusaetzlich vorher die Ursache dafuer,
+  // dass ein Tastendruck-Ergebnis fast sofort wieder ueberschrieben
+  // wurde -- mit eigenem Fenster ist das jetzt strukturell ausgeschlossen,
+  // nicht mehr nur durch eine Wartezeit kaschiert.
+  if (desfireModalState == MODAL_CLOSED) {
+    // Nur hier, im loop()-Task, wird tatsaechlich gezeichnet/geloggt -- siehe
+    // Kommentar bei recvPending oben.
+    if (recvPending) {
+      recvPending = false;
+      updateReceivedInfo();
+      logReceivedMessage();
+    }
 
-  // WiFi.begin() (siehe WLAN/ESP-NOW-Umschalter) verbindet asynchron im
-  // Hintergrund -- ohne dieses Polling wuerde die WLAN-IP-Zeile erst nach
-  // dem naechsten Tastendruck aktualisiert, obwohl die Verbindung evtl.
-  // laengst steht. Nur aktiv, waehrend der WLAN-Modus eingeschaltet ist.
-  if (wlanModeActive && now - lastWifiPollMs >= WIFI_POLL_INTERVAL_MS) {
-    lastWifiPollMs = now;
-    updateWifiInfo();
-  }
+    if (now - lastRtcDrawMs >= RTC_UPDATE_INTERVAL_MS) {
+      lastRtcDrawMs = now;
+      updateRtcInfo();
+    }
 
-  if (now - lastSendMs >= SEND_INTERVAL_MS) {
-    lastSendMs = now;
-    outgoing.counter++;
-    esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
-    updateSendInfo();
-  }
+    if (now - lastSdPollMs >= SD_POLL_INTERVAL_MS) {
+      lastSdPollMs = now;
+      checkSdCard();
+    }
 
-  // Poll-Versuch, danach 1s Entprellen, damit eine aufliegende Karte nicht
-  // staendig neu "erkannt" wird. NUR EIN Aufruf von inListPassiveTarget()
-  // fuer Erkennung UND Aktivierung -- ein zusaetzlicher
-  // readPassiveTargetID()-Aufruf davor (frueherer Ansatz) sendet dasselbe
-  // native InListPassiveTarget-Kommando ein zweites Mal an eine schon
-  // aktivierte Karte und schlug an echter Hardware regelmaessig fehl
-  // ("DESFire: inListPassiveTarget() fehlgeschlagen" trotz zuvor
-  // erfolgreich gelesener UID -- siehe Kopfkommentar der Datei).
-  //
-  // WICHTIG: Diese Bibliotheksversion (adafruit/Adafruit PN532@^1.3.3)
-  // bietet inListPassiveTarget() NUR parameterlos an -- keine Ueberladung
-  // mit Timeout-Argument (ein frueherer Versuch, hier explizit ein 100ms-
-  // Timeout zu uebergeben, ist am echten Build mit "no matching function"
-  // gescheitert). Das eigentliche Problem liegt ohnehin nicht am Software-
-  // Timeout dieses Aufrufs, sondern daran, wie oft der PN532-CHIP SELBST
-  // intern nach einer Karte sucht, bevor er ueberhaupt antwortet -- siehe
-  // nfc.setPassiveActivationRetries(1) in pn532Begin().
-  if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
-    lastPn532AttemptMs = now;
-    // now - lastManualOpMs >= MANUAL_OP_DISPLAY_HOLD_MS: pausiert den
-    // Auto-Scan kurz nach einem manuellen DESFire-Button (siehe
-    // desfireOpFinish()), sonst ueberschreibt der naechste Auto-Scan-
-    // Durchlauf dessen Ergebnis fast sofort wieder.
-    if (now - lastUidReadMs >= PN532_DEBOUNCE_MS && now - lastManualOpMs >= MANUAL_OP_DISPLAY_HOLD_MS) {
-      if (nfc.inListPassiveTarget()) {
-        desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
-        updateUidInfo();
-        // Erst piepen, wenn der komplette Lesevorgang abgeschlossen ist --
-        // vorher piepte es sofort bei Kartenerkennung, noch bevor ueberhaupt
-        // feststand, ob/was gelesen werden konnte.
-        buzzerBeep(80);
-        lastUidReadMs = now;
+    // WiFi.begin() (siehe WLAN/ESP-NOW-Umschalter) verbindet asynchron im
+    // Hintergrund -- ohne dieses Polling wuerde die WLAN-IP-Zeile erst nach
+    // dem naechsten Tastendruck aktualisiert, obwohl die Verbindung evtl.
+    // laengst steht. Nur aktiv, waehrend der WLAN-Modus eingeschaltet ist.
+    if (wlanModeActive && now - lastWifiPollMs >= WIFI_POLL_INTERVAL_MS) {
+      lastWifiPollMs = now;
+      updateWifiInfo();
+    }
+
+    if (now - lastSendMs >= SEND_INTERVAL_MS) {
+      lastSendMs = now;
+      outgoing.counter++;
+      esp_now_send(broadcastAddr, (uint8_t *)&outgoing, sizeof(outgoing));
+      updateSendInfo();
+    }
+
+    // Poll-Versuch, danach 1s Entprellen, damit eine aufliegende Karte nicht
+    // staendig neu "erkannt" wird. NUR EIN Aufruf von inListPassiveTarget()
+    // fuer Erkennung UND Aktivierung -- ein zusaetzlicher
+    // readPassiveTargetID()-Aufruf davor (frueherer Ansatz) sendet dasselbe
+    // native InListPassiveTarget-Kommando ein zweites Mal an eine schon
+    // aktivierte Karte und schlug an echter Hardware regelmaessig fehl
+    // ("DESFire: inListPassiveTarget() fehlgeschlagen" trotz zuvor
+    // erfolgreich gelesener UID -- siehe Kopfkommentar der Datei).
+    //
+    // WICHTIG: Diese Bibliotheksversion (adafruit/Adafruit PN532@^1.3.3)
+    // bietet inListPassiveTarget() NUR parameterlos an -- keine Ueberladung
+    // mit Timeout-Argument (ein frueherer Versuch, hier explizit ein 100ms-
+    // Timeout zu uebergeben, ist am echten Build mit "no matching function"
+    // gescheitert). Das eigentliche Problem liegt ohnehin nicht am Software-
+    // Timeout dieses Aufrufs, sondern daran, wie oft der PN532-CHIP SELBST
+    // intern nach einer Karte sucht, bevor er ueberhaupt antwortet -- siehe
+    // nfc.setPassiveActivationRetries(1) in pn532Begin().
+    if (pn532Ready && now - lastPn532AttemptMs >= PN532_POLL_INTERVAL_MS) {
+      lastPn532AttemptMs = now;
+      if (now - lastUidReadMs >= PN532_DEBOUNCE_MS) {
+        if (nfc.inListPassiveTarget()) {
+          desfireDeepRead(); // setzt uidMsg + desfireSummaryMsg
+          updateUidInfo();
+          // Erst piepen, wenn der komplette Lesevorgang abgeschlossen ist --
+          // vorher piepte es sofort bei Kartenerkennung, noch bevor ueberhaupt
+          // feststand, ob/was gelesen werden konnte.
+          buzzerBeep(80);
+          lastUidReadMs = now;
+        }
       }
     }
   }
@@ -1198,6 +1361,33 @@ void loop() {
     if (Serial) {
       Serial.printf("Touch: roh=(%d,%d) -> gedreht=(%d,%d)\n", rawXDbg, rawYDbg, x, y);
     }
+
+    // Solange das DESFire-Aktions-Fenster offen ist, werden AUSSCHLIESSLICH
+    // dessen eigene Buttons ausgewertet -- die Buttons des Hauptbildschirms
+    // darunter sind inaktiv (sie sind ja auch unsichtbar).
+    if (desfireModalState == MODAL_CONFIRM) {
+      if (inside(btnModalCancel, x, y)) {
+        buzzerBeep(80);
+        desfireModalState = MODAL_CLOSED;
+        redrawMainScreen();
+      } else if (inside(btnModalConfirm, x, y)) {
+        drawButton(btnModalConfirm, TFT_GREEN);
+        desfireRunModalAction(desfireModalAction); // setzt desfireSummaryMsg, piept via desfireOpFinish()
+        desfireModalState = MODAL_RESULT;
+        drawDesfireModalResult();
+      }
+      delay(150);
+      return;
+    } else if (desfireModalState == MODAL_RESULT) {
+      if (inside(btnModalClose, x, y)) {
+        buzzerBeep(80);
+        desfireModalState = MODAL_CLOSED;
+        redrawMainScreen();
+      }
+      delay(150);
+      return;
+    }
+
     if (inside(btnNtpSync, x, y)) {
       drawButton(btnNtpSync, TFT_GREEN);
       bool ntpOk = false;
@@ -1245,44 +1435,44 @@ void loop() {
       delay(80);
       drawButton(btnBrightDn, TFT_DARKGREY);
     } else if (inside(btnSetMasterKey, x, y)) {
-      drawButton(btnSetMasterKey, TFT_GREEN);
-      desfireOpSetMasterKey();
-      drawButton(btnSetMasterKey, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_SET_MASTER_KEY;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (inside(btnResetMasterKey, x, y)) {
-      drawButton(btnResetMasterKey, TFT_GREEN);
-      desfireOpResetMasterKey();
-      drawButton(btnResetMasterKey, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_RESET_MASTER_KEY;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (inside(btnCreateApp, x, y)) {
-      drawButton(btnCreateApp, TFT_GREEN);
-      desfireOpCreateApp();
-      drawButton(btnCreateApp, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_CREATE_APP;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (inside(btnDeleteApp, x, y)) {
-      drawButton(btnDeleteApp, TFT_GREEN);
-      desfireOpDeleteApp();
-      drawButton(btnDeleteApp, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_DELETE_APP;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (inside(btnCredit, x, y)) {
-      drawButton(btnCredit, TFT_GREEN);
-      desfireOpCredit();
-      drawButton(btnCredit, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_CREDIT;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (inside(btnDebit, x, y)) {
-      drawButton(btnDebit, TFT_GREEN);
-      desfireOpDebit();
-      drawButton(btnDebit, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_DEBIT;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (inside(btnGetValue, x, y)) {
-      drawButton(btnGetValue, TFT_GREEN);
-      desfireOpGetValue();
-      drawButton(btnGetValue, TFT_DARKGREY);
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_GET_VALUE;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
     } else if (y < BTN_ROW1_Y) {
       // Tap auf freie Flaeche -> Hintergrundfarbe wechseln (Panel-Refresh-Test)
       bgIndex = (bgIndex + 1) % (sizeof(bgColors) / sizeof(bgColors[0]));
-      drawStaticParts();
-      updateSdInfo();
-      updateRtcInfo();
-      updatePn532Info();
-      updateSendInfo();
-      updateReceivedInfo();
-      updateUidInfo();
-      updateWifiInfo();
+      redrawMainScreen();
     }
 
     delay(150); // einfaches Debounce

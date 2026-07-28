@@ -302,6 +302,13 @@ künftigen kombinierten Sketch ist das also kein Konflikt.
   Serial Monitor verbunden). Beide Stellen prüfen jetzt vorher
   `if (Serial)` (liefert bei USB-CDC nur `true`, wenn tatsächlich ein Host
   verbunden ist) und überspringen die Ausgabe sonst, statt zu blockieren.
+- **Nach `git pull` + Neu-Flashen ist nicht erkennbar, ob wirklich die
+  neueste Version läuft:** Stage 5 zeigt seit `FIRMWARE_VERSION` in der
+  MAC-Adress-Zeile auf dem Display eine Versionsnummer (Datum + laufende
+  Nummer, z. B. `v2026-07-28.1`) — wird bei jeder inhaltlichen Änderung an
+  `05_pn532_spi.ino`/`main.cpp` hochgezählt. Steht nach dem Flashen dort
+  eine ältere Nummer als erwartet, wurde entweder nicht neu gepullt oder
+  das falsche Projekt/der falsche Ordner gebaut.
 
 ## 8. DESFire-Tiefenauslesung (Stage 5, `desfire.h`)
 
@@ -416,13 +423,19 @@ Code (`05_pn532_spi.ino`), da das Panel keine Tastatur hat:
 | `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
 | `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
 
-**Wichtig für die Anzeige:** Der automatische Lese-Scan (Abschnitt 8)
-läuft weiter im Hintergrund und hätte das Ergebnis eines gerade gedrückten
-Buttons sofort mit seiner eigenen generischen Zusammenfassung
-überschrieben, bevor man es überhaupt lesen konnte — sichtbar war dann
-nur noch der Piepton, ohne erkennbaren Effekt. `desfireOpFinish()`
-(gemeinsamer Abschluss aller 7 Buttons) pausiert den Auto-Scan deshalb
-für `MANUAL_OP_DISPLAY_HOLD_MS` (4 Sekunden) nach jedem Tastendruck.
+**Aktions-Fenster statt Sofortausführung:** Jeder der 7 Buttons öffnet ein
+eigenes Fenster (`DesfireModalState`, `drawDesfireModalConfirm()`/
+`drawDesfireModalResult()`) — erst eine Bestätigung mit **ABBRECHEN**/
+**AUSFÜHREN**, nach der Ausführung das Ergebnis mit **SCHLIESSEN**-Button.
+Grund: der automatische Lese-Scan (Abschnitt 8) lief anfangs weiter im
+Hintergrund und überschrieb das Ergebnis eines gerade gedrückten Buttons
+fast sofort mit seiner eigenen generischen Zusammenfassung — sichtbar war
+dann nur noch der Piepton, ohne erkennbaren Effekt. Ein erster Fix (Auto-
+Scan für einige Sekunden nach jedem Tastendruck pausieren) kaschierte das
+nur; jetzt pausiert der komplette Hintergrund-Block (siehe `loop()`) für
+die gesamte Dauer, in der das Fenster offen ist — keine Race Condition
+mehr, das PN532-Modul bleibt dabei durchgehend aktiv, nur eben ohne
+Hintergrund-Polling währenddessen.
 
 **Buttons:**
 
