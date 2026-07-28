@@ -157,6 +157,35 @@ inline void logMsg(const char *fmt, ...) {
 // statt (wie vorher) fest an EINE SSID/Passwort-Kombination gebunden zu
 // sein.
 WiFiMulti wifiMulti;
+
+// Diagnose nach jedem wifiMulti.run()-Versuch: bei Erfolg SSID/RSSI/IP,
+// bei Fehlschlag zusaetzlich ein WiFi.scanNetworks() (zeigt, was ueberhaupt
+// in Reichweite ist) UND die aus wifi_secrets.h konfigurierten SSIDs --
+// so laesst sich direkt sehen, ob z. B. ein Tippfehler in der SSID/dem
+// Passwort vorliegt oder das Netzwerk schlicht nicht in Reichweite ist.
+// Passwoerter werden NICHT geloggt (Sicherheit).
+void logWifiAttemptResult() {
+  if (WiFi.status() == WL_CONNECTED) {
+    logMsg("WLAN: verbunden mit '%s' (RSSI %d dBm), IP %s",
+           WiFi.SSID().c_str(), WiFi.RSSI(), WiFi.localIP().toString().c_str());
+    return;
+  }
+  logMsg("WLAN: NICHT verbunden (WiFi.status()=%d).", (int)WiFi.status());
+  logMsg("WLAN: konfiguriert sind %u Netzwerk(e):", (unsigned)(sizeof(WIFI_SECRETS) / sizeof(WIFI_SECRETS[0])));
+  for (size_t i = 0; i < sizeof(WIFI_SECRETS) / sizeof(WIFI_SECRETS[0]); i++) {
+    logMsg("  konfiguriert: '%s'", WIFI_SECRETS[i].ssid);
+  }
+  int n = WiFi.scanNetworks();
+  if (n <= 0) {
+    logMsg("WLAN: Scan fand KEIN Netzwerk in Reichweite (evtl. zu weit weg / 5GHz-only-Netzwerk, ESP32 kann nur 2.4GHz).");
+  } else {
+    logMsg("WLAN: Scan fand %d Netzwerk(e) in Reichweite:", n);
+    for (int i = 0; i < n && i < 8; i++) {
+      logMsg("  gefunden: '%s' (RSSI %d dBm)", WiFi.SSID(i).c_str(), WiFi.RSSI(i));
+    }
+  }
+  WiFi.scanDelete();
+}
 #endif
 
 // canvas zeigt per setBuffer() direkt auf den von rgbPanelInit()
@@ -168,7 +197,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.6";
+const char *FIRMWARE_VERSION = "2026-07-28.7";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -1406,9 +1435,8 @@ void setup() {
   // das periodische Reconnect-Polling in loop()).
   for (size_t i = 0; i < sizeof(WIFI_SECRETS) / sizeof(WIFI_SECRETS[0]); i++) {
     wifiMulti.addAP(WIFI_SECRETS[i].ssid, WIFI_SECRETS[i].password);
+    logMsg("WiFiMulti: Netzwerk '%s' registriert.", WIFI_SECRETS[i].ssid);
   }
-  logMsg("WiFiMulti: %u Netzwerk(e) aus wifi_secrets.h registriert.\n",
-         (unsigned)(sizeof(WIFI_SECRETS) / sizeof(WIFI_SECRETS[0])));
 #endif
 
   // Direkt nach WiFi.mode() liefert WiFi.macAddress() auf manchen Boards bei
@@ -1509,6 +1537,7 @@ void loop() {
         now - lastWifiMultiRetryMs >= WIFI_MULTI_RETRY_INTERVAL_MS) {
       lastWifiMultiRetryMs = now;
       wifiMulti.run();
+      logWifiAttemptResult();
       updateWifiInfo();
     }
 #endif
@@ -1637,6 +1666,7 @@ void loop() {
           wifiMulti.run();
           lastWifiMultiRetryMs = millis();
           logMsg("WLAN-Modus aktiviert -- verbinde mit staerkstem bekannten Netzwerk (siehe WLAN-IP-Zeile) ...");
+          logWifiAttemptResult();
         } else {
           WiFi.disconnect();
           logMsg("ESP-NOW-Modus aktiviert -- WLAN-Verbindung getrennt.");

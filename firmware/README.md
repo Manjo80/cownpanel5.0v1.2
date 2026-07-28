@@ -627,6 +627,34 @@ berechnetes vs. erwartetes `RndA'`) über die neue `logHex()`-Hilfsfunktion
 — damit sich beim nächsten Fehlschlag nachrechnen lässt, ob die Abweichung
 zufällig aussieht oder ein erkennbares Muster hat.
 
+**Nachtrag 2:** Erstes reales Hex-Dump-Log ausgewertet (von Hand gegen
+`pycryptodome` nachgerechnet) — mit den bis dahin geloggten Werten
+(`RndB`, `RndA`, `EncAB[8:16]`, `EncRndAResp`) ließ sich keine der
+naheliegenden IV-/Reihenfolge-Varianten reproduzieren, die zum von der
+Karte erwarteten `RndA'` passt. Zwei mögliche Gründe: entweder fehlten
+noch die Werte `EncRndB` (Kartenantwort aus Schritt 1) und `EncAB[0:8]`
+(erster gesendeter Block) für einen vollständigen Test, oder es lag an
+Übertragungsfehlern beim Abtippen von Werten aus einem Foto (Handy-Foto
+eines gedrehten Displays, z. B. leicht zu verwechselnde Ziffern wie `0`/`D`
+oder `6`/`G`). Beide jetzt behoben: `logHex()`-Diagnose ergänzt um
+`EncRndB` und `EncAB[0:8]` (volle Rohdaten für alle 4 Kryptoschritte
+verfügbar); außerdem gilt ab jetzt: **Hex-Diagnose bitte immer aus der
+Textdatei auf der SD-Karte kopieren, nicht von einem Display-Foto
+abtippen** — die Textdatei ist fehlerfrei kopierbar, ein Foto eines um
+90° gedrehten Displays ist es nicht.
+
+**WLAN-Diagnose ergänzt:** `logWifiAttemptResult()` (neue Funktion,
+aufgerufen nach jedem `wifiMulti.run()`-Versuch) loggt bei Erfolg SSID/
+RSSI/IP, bei Fehlschlag zusätzlich alle aus `wifi_secrets.h` konfigurierten
+SSIDs UND das Ergebnis eines `WiFi.scanNetworks()` (alle tatsächlich in
+Reichweite befindlichen Netzwerke) — damit sich auf einen Blick sehen
+lässt, ob z. B. ein Tippfehler in der SSID vorliegt oder das Zielnetzwerk
+schlicht nicht in Reichweite ist (oder ein 5-GHz-only-Netzwerk, das der
+ESP32 grundsätzlich nicht sehen kann). Passwörter werden dabei nie
+geloggt. Beim Setup wird zusätzlich jede registrierte SSID einzeln
+geloggt (vorher nur die Anzahl) — hilft zu prüfen, ob `wifi_secrets.h`
+korrekt eingelesen wurde.
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele

@@ -627,8 +627,10 @@ inline bool desfireAuthDes3(uint8_t keyNo, const uint8_t key16[16], uint8_t sess
     // aussieht (spraeche fuer Uebertragungsfehler) oder ein erkennbares
     // Muster hat (spraeche fuer einen Logikfehler).
     logMsg("desfireAuthDes3: Diagnose Versuch %d:", attempt);
+    logHex("EncRndB (von Karte, Schritt 1)", encRndB, 8);
     logHex("RndB (entschluesselt)", rndB, 8);
     logHex("RndA (generiert)", rndA, 8);
+    logHex("EncAB[0:8] (gesendet)", encAB, 8);
     logHex("EncAB[8:16] (=IV Schritt 4)", encAB + 8, 8);
     logHex("EncRndAResp (von Karte)", encRndAResp, 8);
     logHex("RndARot (berechnet)", rndARot, 8);
@@ -717,8 +719,10 @@ inline bool desfireAuthAes(uint8_t keyNo, const uint8_t key16[16], uint8_t sessi
 
     // Roh-Hex-Dump siehe Kommentar bei desfireAuthDes3().
     logMsg("desfireAuthAes: Diagnose Versuch %d:", attempt);
+    logHex("EncRndB (von Karte, Schritt 1)", encRndB, 16);
     logHex("RndB (entschluesselt)", rndB, 16);
     logHex("RndA (generiert)", rndA, 16);
+    logHex("EncAB[0:16] (gesendet)", encAB, 16);
     logHex("EncAB[16:32] (=IV Schritt 4)", encAB + 16, 16);
     logHex("EncRndAResp (von Karte)", encRndAResp, 16);
     logHex("RndARot (berechnet)", rndARot, 16);
