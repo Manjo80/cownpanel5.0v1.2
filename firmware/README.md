@@ -580,6 +580,53 @@ erneuter Versuch würde dort nur unnötig Zeit kosten. Die Logmeldung bei
 endgültigem Fehlschlag weist jetzt außerdem explizit darauf hin, dass der
 Schlüssel laut Karten-Status korrekt war.
 
+**Nachtrag: Retry allein hat es NICHT behoben — echter Krypto-Bug
+gefunden.** Ein zweites reales Log (mit dem Retry-Fix bereits aktiv, echte
+EV3-Karte, per TagInfo als Original-NXP-Chip verifiziert) zeigte: **alle
+3 unabhängigen Versuche** scheitern identisch (Status `0x00` in Schritt 2,
+eigene RndA-Prüfung schlägt fehl). Bei einem echten Übertragungsfehler
+(zufälliger Bitfehler auf der Luftschnittstelle) wäre es praktisch
+ausgeschlossen, dass 3 komplett unabhängige Durchläufe (jeweils frisches
+`RndA`, frisches `RndB` von der Karte) exakt gleich scheitern — das
+beweist einen **deterministischen Bug**, keinen Zufallsfehler.
+
+Byte-für-byte-Vergleich der eigenen Implementierung gegen den
+tatsächlichen Quellcode von libfreefare (`mifare_desfire.c`/
+`mifare_desfire_crypto.c`, direkt von GitHub geladen und gelesen, nicht
+nur zusammengefasst) fand die Ursache: Die NXP-Legacy-Authentifizierung
+(Kommando `0x0A`) verschlüsselt das PCD→PICC-Kryptogramm (`RndA||RndB'`)
+**nicht** mit der normalen CBC-Verschlüsselungsfunktion, sondern — eine
+dokumentierte Eigenheit dieses alten Protokolls — mit der
+**Entschlüsselungsfunktion** des Blockchiffres (libfreefare übergibt dort
+explizit `MCO_DECYPHER` statt `MCO_ENCYPHER`, aber **nur** für
+`AUTHENTICATE_LEGACY`; AES/ISO-Authentifizierung nutzt an derselben Stelle
+ganz normal die Verschlüsselungsfunktion). Der eigene Code nutzte bislang
+überall die normale Verschlüsselungsfunktion.
+
+**Warum das beim Werks-Default-Schlüssel (16 Nullbytes) unsichtbar
+blieb:** Rechnerisch nachgeprüft (Python, `pycryptodome`) — bei einem
+DES-Schlüssel aus lauter Nullbytes sind Ver- und Entschlüsselungsfunktion
+**identisch** (jede DES-Rundenschlüsselfolge ist bei einem Nullschlüssel
+palindromisch, siehe `DES_SHIFTS`-Rotation auf einem bereits-Null-Register
+in `desfire.h`). Der Bug war beim Testen mit dem Werksschlüssel deshalb
+mathematisch wirkungslos — **hätte** aber bei `CUSTOM_KEY` (der echte,
+zufällige 16-Byte-Schlüssel für "MASTER-PW SETZEN") zugeschlagen, sobald
+die Karte diesen Schlüssel tatsächlich trägt. **Fix:** neue Funktion
+`desfireDes3CbcSendLegacy()` in `desfire.h`, die exakt diese Eigenheit
+nachbildet (CBC-Struktur, aber mit der Entschlüsselungs-Chiffre als
+Primitiv), nur für den betroffenen Schritt in `desfireAuthDes3()`.
+
+**Das erklärt bisher aber NICHT, warum der Werks-Default-Schlüssel selbst
+scheitert** (dort ist der Fix ja nachweislich wirkungslos, s. o.) — nach
+erschöpfender Protokoll-/Krypto-Analyse (inkl. dieses Fixes) bleibt das
+weiterhin ungeklärt. Um beim nächsten Fehlschlag echte Daten statt nur
+Erfolg/Misserfolg zu haben, loggen `desfireAuthDes3()`/`desfireAuthAes()`
+bei jedem fehlgeschlagenen Versuch jetzt zusätzlich die rohen
+Zwischenwerte als Hex (`RndB`, `RndA`, IV für Schritt 4, `EncRndAResp`,
+berechnetes vs. erwartetes `RndA'`) über die neue `logHex()`-Hilfsfunktion
+— damit sich beim nächsten Fehlschlag nachrechnen lässt, ob die Abweichung
+zufällig aussieht oder ein erkennbares Muster hat.
+
 ## 13. Mehrere WLAN-Netzwerke (Stage 5, `WiFiMulti`)
 
 `wifi_secrets.h` (Stage 5) unterstützt jetzt beliebig viele
