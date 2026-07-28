@@ -971,8 +971,10 @@ dessen, was schon da ist — passend zum eigentlichen Zweck dieses
 Repositories. Geplanter Umfang, geordnet nach Priorität:
 
 **A) Noch offene Bugs (zuerst):**
-1. `GetFileIDs`-Anomalie (Nachtrag 7) — mit der neuen Hex-Dump-Diagnose
-   beim nächsten Auftreten eingrenzen.
+1. ~~`GetFileIDs`-Anomalie~~ — Ursache gefunden, Gegenmaßnahme eingebaut,
+   siehe "Ergebnisse der ersten Testrunde" unten. Bitte beim nächsten
+   Auftreten trotzdem nochmal die neuen Log-Zeilen schicken, um die
+   Gegenmaßnahme selbst zu bestätigen.
 
 **B) Bisher ungetestete Codepfade:**
 2. AES-128-Authentifizierung (`desfireAuthAes()`) — nie erfolgreich
@@ -1009,6 +1011,63 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
     Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
     Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
     Hardware ausschließen oder bestätigen.
+
+### Ergebnisse der ersten Testrunde
+
+**Test 6 (Karte mitten im Vorgang wegziehen) durchgeführt — zwei echte
+Funde dabei:**
+
+1. **"App wurde trotz angezeigtem Fehlschlag angelegt" -- erklärt, kein
+   Datenverlust-Bug.** Log zeigte:
+   ```
+   desfireCreateApplication(): UNBEKANNT (status=0xDE)
+   desfireOpCreateApp(): CreateApplication fehlgeschlagen (existiert sie schon?).
+   ```
+   `0xDE` ist der DESFire-Code für `DUPLICATE_ERROR` ("Anwendung
+   existiert bereits") -- unsere `desfireStatusName()` kannte den Code
+   noch nicht und zeigte "UNBEKANNT". Der tatsächliche Ablauf: beim
+   ERSTEN (abgebrochenen) Versuch hatte die Karte `CreateApplication`
+   bereits verarbeitet, BEVOR das Wegziehen die Rückmeldung zum Reader
+   verhinderte -- der Reader sah nur einen Kommunikationsfehler und
+   zeigte "fehlgeschlagen", obwohl die Karte die Aktion schon
+   ausgeführt hatte. Beim NÄCHSTEN Versuch meldet die Karte dann
+   korrekterweise `0xDE` ("gibt's schon"), was ebenfalls als
+   "fehlgeschlagen" angezeigt wurde. Das ist **kein Bug in der
+   Zuverlässigkeit** -- es ist erwartetes, physikalisch bedingtes
+   NFC-Verhalten: wird das RF-Feld genau zwischen "Karte hat das
+   Kommando verarbeitet" und "Antwort beim Reader angekommen"
+   unterbrochen, weiß der Reader nicht mehr sicher, ob die Aktion
+   durchging. **Wichtige Konsequenz fürs spätere Terminal:** nach einem
+   gemeldeten Fehlschlag NIE einfach nochmal automatisch versuchen, ohne
+   vorher den tatsächlichen Kartenzustand zu prüfen (genau das haben wir
+   hier über die Tiefenauslesung zufällig getan und dadurch bemerkt).
+   **Fix:** `0xDE` (`DUPLICATE_ERROR`), `0xCA` (`COMMAND_ABORTED`) und
+   `0xEE` (`MEMORY_ERROR`) zu `desfireStatusName()` ergänzt, damit
+   solche Fälle beim nächsten Mal klar im Log stehen statt "UNBEKANNT".
+
+2. **`GetFileIDs`-Anomalie: Ursache eingegrenzt, Gegenmaßnahme
+   eingebaut.** Drei unabhängige Vorkommen im selben Testlauf zeigten
+   IMMER exakt 8 zusätzliche, unplausible "Dateien" (z. B. 233, 186, 21,
+   219, 22, 250, 213, 239) -- zu regelmäßig für reines Zufallsrauschen,
+   und 8 Byte entspricht genau der Blockgröße unserer DES3-
+   Authentifizierungsantworten. Der tatsächliche Adafruit_PN532-
+   Quellcode (`inDataExchange()`, direkt von GitHub geladen und
+   gelesen) zeigt: die Antwortlänge wird nur übernommen, wenn die vom
+   **PN532-Chip selbst** mitgesendete Längen-Prüfsumme (LCS) passt --
+   das schließt einen Treiber-/Auswertungsbug in unserem Code oder der
+   Adafruit-Bibliothek aus. Wenn die Länge dennoch falsch ist, muss der
+   PN532-CHIP selbst eine falsche (aber intern konsistente) Länge
+   melden -- vermutlich Restdaten im chip-internen Zielantwortspeicher
+   von der unmittelbar vorangegangenen 8-Byte-Authentifizierungsantwort.
+   Das ist eine Hardware-/Chip-Eigenheit, kein Software-Bug, und lässt
+   sich nicht in der Treiber-Bibliothek reparieren.
+   **Gegenmaßnahme:** `desfireGetFileIDs()` wiederholt die Abfrage bis
+   zu 2x, sobald mehr als 1 Datei gemeldet wird, und übernimmt nur ein
+   Ergebnis, das sich in zwei aufeinanderfolgenden Abfragen exakt
+   bestätigt (ein echter Speichermüll-Fehlschlag sollte sich nicht
+   identisch wiederholen). Funktioniert unverändert auch für echte
+   Apps mit mehreren Dateien (z. B. spätere Record-Dateien), solange die
+   Wiederholung dasselbe Ergebnis liefert.
 
 Punkte A-C brauchen keine neue Hardware und keinen neuen Code (außer
 punktuellen Diagnose-Ergänzungen wie in Nachtrag 7) -- das ist der

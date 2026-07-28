@@ -80,6 +80,9 @@ inline const char *desfireStatusName(uint8_t status) {
     case 0xAE: return "AUTHENTICATION_ERROR";
     case 0xAF: return "ADDITIONAL_FRAME";
     case 0xBE: return "BOUNDARY_ERROR";
+    case 0xCA: return "COMMAND_ABORTED";
+    case 0xDE: return "DUPLICATE_ERROR";
+    case 0xEE: return "MEMORY_ERROR";
     case 0xF0: return "FILE_NOT_FOUND";
     case 0xF1: return "FILE_INTEGRITY_ERROR";
     case 0xFF: return "PN532_TRANSCEIVE_FEHLGESCHLAGEN";
@@ -181,17 +184,38 @@ inline uint8_t desfireGetFileIDs(uint8_t fileIds[], uint8_t maxFiles) {
     logMsg("desfireGetFileIDs(): %s (status=0x%02X)\n", desfireStatusName(status), status);
     return 0;
   }
-  // Diagnose (temporaer): an echter Hardware wurden hier schon mehr
-  // "Dateien" gemeldet als je angelegt wurden (9 statt der erwarteten 1,
-  // mit eindeutig unplausiblen Dateinummern wie 218 -- siehe
-  // firmware/README.md, Abschnitt "Stage 6"). len > 1 ist fuer dieses
-  // Projekt (aktuell hoechstens 1 Value-Datei pro App) bereits verdaechtig
-  // und wird geloggt, um beim naechsten Auftreten die rohen Antwortbytes
-  // zu haben statt nur die (moeglicherweise falsch interpretierten)
-  // Dateinummern.
-  if (len > 1) {
-    logMsg("desfireGetFileIDs(): len=%u (mehr als die erwartete 1 Datei -- Diagnose)", len);
+  // An echter Hardware wurden hier schon deutlich mehr "Dateien" gemeldet
+  // als je angelegt wurden (bis zu 9 statt der erwarteten 1, mit klar
+  // unplausiblen Dateinummern wie 218) -- der Adafruit-Treiber uebernimmt
+  // die Laenge nur, wenn die vom PN532-CHIP SELBST mitgesendete
+  // Laengen-Pruefsumme (LCS) passt (siehe Adafruit_PN532.cpp,
+  // inDataExchange()), das Problem liegt also vermutlich im PN532-
+  // internen Zielantwortspeicher (Restdaten des vorangegangenen 8-Byte-
+  // Authentifizierungsaustauschs), nicht im Treiber oder unserem Code
+  // (siehe firmware/README.md, Abschnitt "Stage 6"). Ein echter
+  // Speichermuell-Fehlschlag wiederholt sich vermutlich nicht IDENTISCH
+  // -- deshalb: bei verdaechtig hoher Anzahl (>1) die Abfrage bis zu 2x
+  // wiederholen und nur ein Ergebnis uebernehmen, das sich in zwei
+  // aufeinanderfolgenden Abfragen exakt bestaetigt.
+  for (int attempt = 1; len > 1 && attempt <= 2; attempt++) {
+    logMsg("desfireGetFileIDs(): len=%u (Versuch %d, mehr als die erwartete 1 Datei) -- pruefe erneut", len, attempt);
     logHex("rohe Datei-IDs", buf, len < 32 ? len : 32);
+
+    uint8_t buf2[32];
+    uint16_t len2 = 0;
+    uint8_t status2 = desfireTransceive(0x6F, nullptr, 0, buf2, &len2, sizeof(buf2));
+    if (status2 != 0x00) {
+      logMsg("desfireGetFileIDs(): Wiederholung fehlgeschlagen (status=0x%02X)", status2);
+      break;
+    }
+    if (len2 == len && memcmp(buf, buf2, len) == 0) {
+      logMsg("desfireGetFileIDs(): Wiederholung bestaetigt dasselbe Ergebnis -- wird uebernommen.");
+      break;
+    }
+    logMsg("desfireGetFileIDs(): Wiederholung ergab ein ANDERES Ergebnis (len=%u) -- "
+           "vermutlich war die vorherige Antwort PN532-Speichermuell.", len2);
+    memcpy(buf, buf2, len2 < sizeof(buf2) ? len2 : sizeof(buf2));
+    len = len2;
   }
   uint8_t count = len;
   if (count > maxFiles) count = maxFiles;
