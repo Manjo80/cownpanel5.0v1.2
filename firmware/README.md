@@ -1025,15 +1025,23 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    eine echte Karte authentifiziert. Damit ist der komplette
    AES-128-Auth-Handshake (`desfireAuthWithKey()`-Fallback-Pfad) an
    echter Hardware verifiziert.
-3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
-   `isAes=true`) — **noch NICHT bestätigt.** Der `APPLICATION_NOT_FOUND`-
-   Fund im selben Testlauf (siehe vorherige Fassung dieses Abschnitts) war
-   laut Rückmeldung des Testers **kein Firmware-Bug**, sondern
-   durcheinandergeratene manuelle Testreihenfolge (u. a. wurde
-   ausprobiert, was beim erneuten "APP ERSTELLEN" auf eine bereits
-   bestehende App passiert -- korrekt als `DUPLICATE_ERROR` erkannt).
-   Nächster Test jetzt über die neue TEST-SEQUENZ (siehe unten) statt von
-   Hand, damit die Reihenfolge garantiert stimmt.
+3. ~~AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
+   `isAes=true`)~~ — **BESTÄTIGT an echter Hardware** (2026-07-29, 09:29
+   Uhr, erster vollständiger Lauf der neuen TEST-SEQUENZ, siehe unten):
+   ```
+   desfireOpSetMasterKey(): App-Key (654321) gesetzt.
+   ...
+   desfireOpResetMasterKey(): App-Key (654321) zurueckgesetzt.
+   ```
+   Sowohl ChangeKey AUF den Custom-AES-Schlüssel als auch wieder ZURÜCK
+   auf den Werks-Default liefen erfolgreich gegen die AES-Testapp durch.
+   Damit sind alle in Abschnitt B geplanten AES-Codepfade
+   (Authentifizierung + ChangeKey) an echter Hardware verifiziert.
+   Der `APPLICATION_NOT_FOUND`-Fund aus dem vorherigen Testlauf war laut
+   Rückmeldung des Testers tatsächlich durcheinandergeratene manuelle
+   Testreihenfolge, nicht dieser Codepfad — bestätigt dadurch, dass der
+   TEST-SEQUENZ-Lauf (garantiert richtige Reihenfolge) hier sauber
+   durchlief.
 
 **Neu: automatisierte TEST-SEQUENZ (Version `2026-07-29.19`).** Auf
 Nutzerwunsch, nachdem manuelles Testen in falscher Reihenfolge zu einem
@@ -1050,9 +1058,9 @@ Terminal-Nutzung):
 1. KARTEN INFO (Ausgangszustand) → 2. AUF STANDARD → 3. APP ERSTELLEN
 (2K3DES) → 4. MASTER-PW SETZEN → 5. GUTHABEN BUCHEN → 6. GUTHABEN NUTZEN
 → 7. GUTHABEN ABFRAGEN (Kontrolle) → 8. AUF STANDARD → 9. APP ERSTELLEN
-(AES) → 10. MASTER-PW SETZEN (**AES-ChangeKey, bisher unbestätigt**) →
-11. GUTHABEN BUCHEN → 12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN
-(Kontrolle) → 14. AUF STANDARD → 15. KARTEN INFO (Endzustand).
+(AES) → 10. MASTER-PW SETZEN (AES-ChangeKey) → 11. GUTHABEN BUCHEN →
+12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN (Kontrolle) → 14. AUF
+STANDARD → 15. KARTEN INFO (Endzustand).
 
 Jeder Schritt zeigt "Schritt X/15:" im Fenstertitel, den Grund, warum er
 in der Sequenz steckt, und danach wie gewohnt AUSFÜHREN → Karte auflegen
@@ -1063,6 +1071,30 @@ Punkt die GESAMTE Sequenz**, nicht nur den aktuellen Schritt (rot
 hervorgehoben). Löschende Schritte (APP LOESCHEN) sind bewusst NICHT
 Teil der Sequenz -- Löschen bleibt ein separater, gezielter
 Tastendruck.
+
+**Erster kompletter Lauf (2026-07-29, 09:28 Uhr): alle 15 Schritte
+erfolgreich, EIN Fund danach beim manuellen Aufräumen.** Beide Apps
+angelegt, beide Master-Keys gesetzt UND zurückgesetzt (2K3DES + AES),
+Guthaben-Zyklus auf beiden Apps sauber — bestätigt außerdem, dass die
+zwischenzeitlich befürchtete `APPLICATION_NOT_FOUND`-Anomalie (siehe
+Punkt 3 oben) tatsächlich nur an der vorher durcheinandergeratenen
+manuellen Reihenfolge lag, nicht an einem Codepfad.
+
+Direkt NACH der Sequenz (APP LOESCHEN ist bewusst nicht automatisiert,
+siehe oben) meldete "APP LOESCHEN" für die AES-App einmalig
+`APPLICATION_NOT_FOUND`, obwohl dieselbe App Sekunden vorher per KARTEN
+INFO noch zweifelsfrei vorhanden war. Der Tester musste danach erst
+"APP ERSTELLEN (AES)" erneut antippen (bestätigte korrekt
+`DUPLICATE_ERROR` -- die App war die ganze Zeit noch da), um danach
+erfolgreich löschen zu können. Das passt zum selben PN532-
+Antwortmüll-Verdacht wie die `GetFileIDs`-Anomalie (Punkt A.1) und dem
+in Abschnitt 12/Nachtrag 7 dokumentierten Fall ("App trotz gemeldetem
+Fehlschlag angelegt") — vermutlich verfälscht der PN532-Chip
+gelegentlich auch den `DeleteApplication`-Statuscode.
+**Gegenmaßnahme (Version `2026-07-29.20`):** `desfireOpDeleteApp()`
+versucht bei einem Fehlschlag automatisch EINMAL erneut, bevor es
+aufgibt — spart den manuellen Nachfass-Umweg über "APP ERSTELLEN".
+Noch nicht an echter Hardware bestätigt.
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
 4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).

@@ -197,7 +197,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-29.19";
+const char *FIRMWARE_VERSION = "2026-07-29.20";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -1486,13 +1486,30 @@ void desfireOpDeleteApp() {
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireDeleteApplication(activeCustomAid);
+      // Beobachtet (2026-07-29, Testsequenz-Log): DeleteApplication
+      // meldete einmalig APPLICATION_NOT_FOUND fuer eine App, die laut
+      // KARTEN INFO Sekunden vorher zweifelsfrei noch da war -- danach
+      // bestaetigte ein manuelles "APP ERSTELLEN" DUPLICATE_ERROR (App
+      // war also die ganze Zeit noch vorhanden), und ein erneuter
+      // Loesch-Versuch klappte. Passt zum selben PN532-Antwortmuell-
+      // Verdacht wie die GetFileIDs-Anomalie und der in Abschnitt 12
+      // Nachtrag 7 dokumentierte Fall ("App trotz gemeldetem Fehlschlag
+      // angelegt") -- vermutlich verfaelscht der PN532-Chip gelegentlich
+      // auch DIESEN Statuscode. Ein zweiter, automatischer Versuch
+      // direkt danach (statt den Nutzer manuell nachfassen zu lassen)
+      // kostet nur eine zusaetzliche RF-Runde und behebt genau dieses
+      // Symptom.
+      if (!ok) {
+        logMsg("desfireOpDeleteApp(): Erster Versuch fehlgeschlagen, versuche einmal erneut ...");
+        ok = desfireDeleteApplication(activeCustomAid);
+      }
     } else {
       logMsg("desfireOpDeleteApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
     }
   }
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
-           ok ? "Applikation %s geloescht" : "Applikation %s loeschen fehlgeschlagen", activeAidLabel);
+           ok ? "Applikation %s geloescht" : "Applikation %s loeschen fehlgeschlagen (2x versucht)", activeAidLabel);
   desfireOpFinish(ok);
 }
 
