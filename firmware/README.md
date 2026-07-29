@@ -1026,19 +1026,43 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    AES-128-Auth-Handshake (`desfireAuthWithKey()`-Fallback-Pfad) an
    echter Hardware verifiziert.
 3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
-   `isAes=true`) — **noch NICHT bestätigt.** Im selben Testlauf wurde
-   "MASTER-PW SETZEN" gegen die AES-App nicht erfolgreich protokolliert;
-   stattdessen zeigt das Log kurz danach bei "AUF STANDARD" einen noch
-   ungeklärten Fund: `desfireSelectApplication(): APPLICATION_NOT_FOUND
-   (status=0xA0)` für die AES-App, obwohl dieselbe App ~1 Minute vorher
-   per KARTEN INFO noch zweifelsfrei vorhanden war (kein
-   `DeleteApplication` dazwischen im Log). Könnte echtes Antwortmüll-
-   Symptom (siehe Punkt A.1) oder Karte kurz nicht sauber aufgelegen sein
-   -- noch offen, siehe Rückfrage im Chat. **Nächster Test:** "MASTER-PW
-   SETZEN" GEZIELT und ausschließlich gegen die AES-App ausführen (Karte
-   die ganze Zeit ruhig auflegen) und danach GUTHABEN BUCHEN/NUTZEN/
-   ABFRAGEN gegen sie durchspielen, um den ChangeKey-Zweig wirklich zu
-   testen.
+   `isAes=true`) — **noch NICHT bestätigt.** Der `APPLICATION_NOT_FOUND`-
+   Fund im selben Testlauf (siehe vorherige Fassung dieses Abschnitts) war
+   laut Rückmeldung des Testers **kein Firmware-Bug**, sondern
+   durcheinandergeratene manuelle Testreihenfolge (u. a. wurde
+   ausprobiert, was beim erneuten "APP ERSTELLEN" auf eine bereits
+   bestehende App passiert -- korrekt als `DUPLICATE_ERROR` erkannt).
+   Nächster Test jetzt über die neue TEST-SEQUENZ (siehe unten) statt von
+   Hand, damit die Reihenfolge garantiert stimmt.
+
+**Neu: automatisierte TEST-SEQUENZ (Version `2026-07-29.19`).** Auf
+Nutzerwunsch, nachdem manuelles Testen in falscher Reihenfolge zu einem
+schwer einzuordnenden Log geführt hatte ("Idealerweise machst du mir
+einen Testbutton, der alles nacheinander testet, wie es gebraucht wird,
+mit Rückfragen Karte hin/Karte weg"): neuer Button "TEST-SEQUENZ (STAGE
+6)" im EINSTELLUNGEN-Untermenü (auf dem Hauptbildschirm war kein Platz
+mehr für einen 10. Button) führt **15 Schritte automatisch
+nacheinander** aus -- jeder Schritt eine eigene, ganz normale
+Kartenauflage (bewusst KEINE durchgehende RF-Sitzung über alle Schritte,
+sondern echtes Auflegen/Erkennen pro Schritt, entspricht realer
+Terminal-Nutzung):
+
+1. KARTEN INFO (Ausgangszustand) → 2. AUF STANDARD → 3. APP ERSTELLEN
+(2K3DES) → 4. MASTER-PW SETZEN → 5. GUTHABEN BUCHEN → 6. GUTHABEN NUTZEN
+→ 7. GUTHABEN ABFRAGEN (Kontrolle) → 8. AUF STANDARD → 9. APP ERSTELLEN
+(AES) → 10. MASTER-PW SETZEN (**AES-ChangeKey, bisher unbestätigt**) →
+11. GUTHABEN BUCHEN → 12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN
+(Kontrolle) → 14. AUF STANDARD → 15. KARTEN INFO (Endzustand).
+
+Jeder Schritt zeigt "Schritt X/15:" im Fenstertitel, den Grund, warum er
+in der Sequenz steckt, und danach wie gewohnt AUSFÜHREN → Karte auflegen
+→ Ergebnis. Statt SCHLIESSEN zeigt das Ergebnisfenster **NÄCHSTER
+SCHRITT** (bzw. **TESTSEQUENZ FERTIG** beim letzten Schritt) und springt
+automatisch zum nächsten Schritt weiter. **ABBRECHEN beendet an jedem
+Punkt die GESAMTE Sequenz**, nicht nur den aktuellen Schritt (rot
+hervorgehoben). Löschende Schritte (APP LOESCHEN) sind bewusst NICHT
+Teil der Sequenz -- Löschen bleibt ein separater, gezielter
+Tastendruck.
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
 4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).

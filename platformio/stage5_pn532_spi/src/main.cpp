@@ -197,7 +197,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-29.18";
+const char *FIRMWARE_VERSION = "2026-07-29.19";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -349,14 +349,65 @@ const int MODAL_BTN_Y = MODAL_Y + MODAL_H - 66;
 Button btnModalCancel  = { MODAL_X + 16, MODAL_BTN_Y, 190, 50, "ABBRECHEN" };
 Button btnModalConfirm = { MODAL_X + MODAL_W - 16 - 190, MODAL_BTN_Y, 190, 50, "AUSFUEHREN" };
 Button btnModalClose   = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "SCHLIESSEN" };
+// Gleiche Geometrie wie btnModalClose (nur andere Beschriftung) -- fuer
+// die Ergebnis-Ansicht WAEHREND einer Testsequenz (siehe unten), damit
+// klar ist, dass ein Tastendruck zum NAECHSTEN Schritt fuehrt statt das
+// Fenster ganz zu schliessen. Touch-Erkennung nutzt weiterhin
+// inside(btnModalClose, ...), da die Flaeche identisch ist.
+Button btnModalNext = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "NAECHSTER SCHRITT" };
+Button btnModalDone = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "TESTSEQUENZ FERTIG" };
 
-// EINSTELLUNGEN-Untermenue -- gleiche Fenstergeometrie, eigene Buttons in
-// einem 2x2-Raster. Nutzt btnModalClose zum Schliessen mit (DESFire-
-// Fenster und Einstellungen sind nie gleichzeitig offen).
+// TEST-SEQUENZ (Nutzerwunsch, siehe firmware/README.md): statt jeden
+// Stage-6-Testschritt einzeln von Hand in der richtigen Reihenfolge zu
+// suchen, fuehrt EIN Button den kompletten Ablauf automatisch, Schritt
+// fuer Schritt, mit denselben Bestaetigungs-/Wartebildschirmen wie ein
+// einzelner Aktions-Button. Jeder Schritt ist EINE ganz normale
+// Kartenauflage (bewusst so, nicht eine einzige durchgehende RF-Sitzung
+// ueber alle Schritte) -- entspricht 1:1 realer Terminal-Nutzung
+// (Karte auflegen, Aktion, Karte wieder wegnehmen) und testet damit auch
+// die Neuerkennung zwischen den Schritten mit. ABBRECHEN beendet an
+// jedem Punkt die GESAMTE Sequenz, nicht nur den aktuellen Schritt.
+struct TestSeqStep {
+  const char *note; // zusaetzlicher Hinweis, WARUM dieser Schritt in der Sequenz steckt
+  DesfireAction action;
+};
+const TestSeqStep TEST_SEQUENCE[] = {
+  { "Ausgangszustand protokollieren.", DESFIRE_ACTION_CARD_INFO },
+  { "Schluessel (PICC + evtl. aktive App) sauberstellen.", DESFIRE_ACTION_RESET_MASTER_KEY },
+  { "2K3DES-Testapp anlegen/bestaetigen, wird aktiv.", DESFIRE_ACTION_CREATE_APP },
+  { "ChangeKey 2K3DES-Zweig (PICC + App).", DESFIRE_ACTION_SET_MASTER_KEY },
+  { "Guthaben buchen (2K3DES-App).", DESFIRE_ACTION_CREDIT },
+  { "Guthaben nutzen, zurueck auf 0 (2K3DES-App).", DESFIRE_ACTION_DEBIT },
+  { "Kontrolle: Guthaben sollte 0 sein (2K3DES-App).", DESFIRE_ACTION_GET_VALUE },
+  { "2K3DES-App-Schluessel vor App-Wechsel zuruecksetzen.", DESFIRE_ACTION_RESET_MASTER_KEY },
+  { "AES-Testapp anlegen/bestaetigen, wird aktiv.", DESFIRE_ACTION_CREATE_APP_AES },
+  { "ChangeKey AES-Zweig -- Stage 6, bisher unbestaetigter Pfad!", DESFIRE_ACTION_SET_MASTER_KEY },
+  { "Guthaben buchen (AES-App).", DESFIRE_ACTION_CREDIT },
+  { "Guthaben nutzen, zurueck auf 0 (AES-App).", DESFIRE_ACTION_DEBIT },
+  { "Kontrolle: Guthaben sollte 0 sein (AES-App).", DESFIRE_ACTION_GET_VALUE },
+  { "AES-App-Schluessel zum Abschluss zuruecksetzen.", DESFIRE_ACTION_RESET_MASTER_KEY },
+  { "Endzustand protokollieren (beide Apps, Guthaben je 0).", DESFIRE_ACTION_CARD_INFO },
+};
+const int TEST_SEQUENCE_COUNT = sizeof(TEST_SEQUENCE) / sizeof(TEST_SEQUENCE[0]);
+bool testSeqActive = false;
+int testSeqIndex = 0;
+// startTestSequence() (ruft drawDesfireModalConfirm() auf) steht ERST
+// nach dessen Definition weiter unten -- siehe dort. Anders als beim
+// .ino-Build generiert PlatformIOs main.cpp-Build keine automatischen
+// Funktions-Prototypen (bereits mehrfach in diesem Projekt aufgefallen,
+// siehe logHex()-Kommentar oben), ein Aufruf vor der Definition waere
+// dort ein Build-Fehler.
+
+// EINSTELLUNGEN-Untermenue -- gleiche Fenstergeometrie, eigene Buttons,
+// oben ein 2x2-Raster, darunter TEST-SEQUENZ ueber die volle Breite (auf
+// dem Hauptbildschirm war kein Platz mehr fuer einen 10. Button, siehe
+// Abschnitt 9). Nutzt btnModalClose zum Schliessen mit (DESFire-Fenster
+// und Einstellungen sind nie gleichzeitig offen).
 Button btnSettingsNtpSync    = { MODAL_X + 16, MODAL_Y + 60, 190, 60, "NTP-SYNC" };
 Button btnSettingsWifiToggle = { MODAL_X + MODAL_W - 16 - 190, MODAL_Y + 60, 190, 60, "WLAN/ESP-NOW" };
 Button btnSettingsBrightUp   = { MODAL_X + 16, MODAL_Y + 60 + 76, 190, 60, "BACKLIGHT +" };
 Button btnSettingsBrightDn   = { MODAL_X + MODAL_W - 16 - 190, MODAL_Y + 60 + 76, 190, 60, "BACKLIGHT -" };
+Button btnTestSequence       = { MODAL_X + 16, MODAL_Y + 60 + 152, MODAL_W - 32, 60, "TEST-SEQUENZ (STAGE 6)" };
 
 // Log-Fenster (auf Nutzerwunsch als EIGENES, groesseres Fenster statt
 // einer kleinen, schwer lesbaren Leiste unter den Buttons) -- fast
@@ -726,6 +777,7 @@ void drawSettingsMenu() {
   drawButton(btnSettingsWifiToggle, TFT_DARKGREY);
   drawButton(btnSettingsBrightUp, TFT_DARKGREY);
   drawButton(btnSettingsBrightDn, TFT_DARKGREY);
+  drawButton(btnTestSequence, TFT_DARKGREY);
   drawButton(btnModalClose, TFT_DARKGREY);
 }
 
@@ -767,6 +819,9 @@ int printWrapped(const char *text, int x, int y, int maxWidthPx, int lineHeight)
 
 // Rahmen + Titel des DESFire-Aktions-Fensters -- gemeinsame Basis fuer
 // Bestaetigungs- und Ergebnis-Ansicht (siehe DesfireModalState oben).
+// Waehrend einer Testsequenz (siehe TEST_SEQUENCE oben) zeigt der Titel
+// zusaetzlich "Schritt X/N:", damit jederzeit klar ist, wo man im Ablauf
+// steht.
 void drawDesfireModalFrame() {
   canvas.fillRoundRect(MODAL_X, MODAL_Y, MODAL_W, MODAL_H, 12, TFT_NAVY);
   canvas.drawRoundRect(MODAL_X, MODAL_Y, MODAL_W, MODAL_H, 12, TFT_WHITE);
@@ -774,21 +829,38 @@ void drawDesfireModalFrame() {
   canvas.setTextColor(TFT_WHITE);
   canvas.setTextSize(2);
   canvas.setCursor(MODAL_X + 16, MODAL_Y + 16);
+  if (testSeqActive) {
+    canvas.printf("Schritt %d/%d:\n", testSeqIndex + 1, TEST_SEQUENCE_COUNT);
+    canvas.setCursor(MODAL_X + 16, MODAL_Y + 16 + 22);
+  }
   canvas.println(DESFIRE_ACTIONS[desfireModalAction].title);
 }
 
 // Bestaetigungs-Ansicht: Beschreibung + ABBRECHEN/AUSFUEHREN. Die Karte
 // wird HIER noch nicht erwartet -- erst nach AUSFUEHREN wechselt das
-// Fenster in den aktiven Wartezustand (drawDesfireModalWaiting()).
+// Fenster in den aktiven Wartezustand (drawDesfireModalWaiting()). In
+// einer Testsequenz zusaetzlich der Grund, warum dieser Schritt in der
+// Sequenz steckt (TEST_SEQUENCE[...].note), und ein Hinweis, dass
+// ABBRECHEN die GESAMTE Sequenz beendet statt nur diesen Schritt.
 void drawDesfireModalConfirm() {
   drawDesfireModalFrame();
   canvas.setTextSize(1.5);
   canvas.setTextColor(TFT_LIGHTGREY);
-  int descLines = printWrapped(DESFIRE_ACTIONS[desfireModalAction].description,
-                                MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
+  int y = MODAL_Y + 60 + (testSeqActive ? 22 : 0); // +22: Titel ist waehrend der Sequenz zweizeilig
+  y += printWrapped(DESFIRE_ACTIONS[desfireModalAction].description,
+                     MODAL_X + 16, y, MODAL_W - 32, 20) * 20;
+  if (testSeqActive) {
+    canvas.setTextColor(TFT_CYAN);
+    y += printWrapped(TEST_SEQUENCE[testSeqIndex].note, MODAL_X + 16, y + 6, MODAL_W - 32, 20) * 20;
+  }
   canvas.setTextColor(TFT_YELLOW);
-  canvas.setCursor(MODAL_X + 16, MODAL_Y + 60 + descLines * 20 + 16);
+  canvas.setCursor(MODAL_X + 16, y + 16);
   canvas.println("AUSFUEHREN tippen, danach Karte auflegen.");
+  if (testSeqActive) {
+    canvas.setTextColor(TFT_RED);
+    canvas.setCursor(MODAL_X + 16, y + 16 + 20);
+    canvas.println("ABBRECHEN beendet die GESAMTE Testsequenz.");
+  }
   drawButton(btnModalCancel, TFT_DARKGREY);
   drawButton(btnModalConfirm, TFT_DARKGREY);
 }
@@ -813,10 +885,15 @@ void drawDesfireModalWaiting() {
 // eines einzelnen printWrapped()-Aufrufs, HIER ist der richtige Ort, um
 // spaeter weitere Karteninformationen zu ergaenzen (ein zusaetzlicher
 // printWrapped()-Aufruf pro neuer Information, y jeweils weiterzaehlen).
+// Waehrend einer Testsequenz zeigt der Button statt SCHLIESSEN entweder
+// NAECHSTER SCHRITT (weitere Schritte offen) oder TESTSEQUENZ FERTIG
+// (letzter Schritt) -- gleiche Flaeche wie btnModalClose, der Touch-
+// Handler (siehe dort) entscheidet anhand von testSeqActive, was ein Tipp
+// darauf bedeutet.
 void drawDesfireModalResult() {
   drawDesfireModalFrame();
   canvas.setTextSize(1.5);
-  int y = MODAL_Y + 60;
+  int y = MODAL_Y + 60 + (testSeqActive ? 22 : 0);
   if (desfireModalAction == DESFIRE_ACTION_CARD_INFO) {
     canvas.setTextColor(TFT_GREENYELLOW);
     y += printWrapped(uidMsg, MODAL_X + 16, y, MODAL_W - 32, 20) * 20 + 12;
@@ -828,7 +905,22 @@ void drawDesfireModalResult() {
     canvas.setTextColor(TFT_GREENYELLOW);
     printWrapped(desfireSummaryMsg, MODAL_X + 16, y, MODAL_W - 32, 20);
   }
-  drawButton(btnModalClose, TFT_DARKGREY);
+  if (testSeqActive) {
+    drawButton(testSeqIndex + 1 < TEST_SEQUENCE_COUNT ? btnModalNext : btnModalDone, TFT_DARKGREY);
+  } else {
+    drawButton(btnModalClose, TFT_DARKGREY);
+  }
+}
+
+// Startet die Testsequenz beim Schritt 0 -- vom EINSTELLUNGEN-Button
+// aufgerufen. Muss NACH drawDesfireModalConfirm() stehen (siehe
+// Kommentar bei der TEST_SEQUENCE-Deklaration oben).
+void startTestSequence() {
+  testSeqActive = true;
+  testSeqIndex = 0;
+  desfireModalAction = TEST_SEQUENCE[0].action;
+  desfireModalState = MODAL_CONFIRM;
+  drawDesfireModalConfirm();
 }
 
 // Aktuelle RTC-Zeit als "YYYY-MM-DD hh:mm:ss" -- fuer Log-Zeitstempel.
@@ -1825,6 +1917,7 @@ void loop() {
     if (desfireModalState == MODAL_CONFIRM) {
       if (inside(btnModalCancel, x, y)) {
         buzzerBeep(80);
+        testSeqActive = false; // ABBRECHEN beendet auch eine laufende Testsequenz komplett
         desfireModalState = MODAL_CLOSED;
         redrawMainScreen();
       } else if (inside(btnModalConfirm, x, y)) {
@@ -1838,16 +1931,34 @@ void loop() {
     } else if (desfireModalState == MODAL_WAITING_CARD) {
       if (inside(btnModalCancel, x, y)) {
         buzzerBeep(80);
+        testSeqActive = false; // ABBRECHEN beendet auch eine laufende Testsequenz komplett
         desfireModalState = MODAL_CLOSED;
         redrawMainScreen();
       }
       delay(150);
       return;
     } else if (desfireModalState == MODAL_RESULT) {
+      // Gleiche Flaeche wie btnModalClose fuer alle drei Beschriftungs-
+      // Varianten (SCHLIESSEN/NAECHSTER SCHRITT/TESTSEQUENZ FERTIG, siehe
+      // drawDesfireModalResult()) -- inside(btnModalClose, ...) erkennt
+      // den Tipp unabhaengig davon, welcher Button gerade gezeichnet ist.
       if (inside(btnModalClose, x, y)) {
         buzzerBeep(80);
-        desfireModalState = MODAL_CLOSED;
-        redrawMainScreen();
+        if (testSeqActive) {
+          testSeqIndex++;
+          if (testSeqIndex < TEST_SEQUENCE_COUNT) {
+            desfireModalAction = TEST_SEQUENCE[testSeqIndex].action;
+            desfireModalState = MODAL_CONFIRM;
+            drawDesfireModalConfirm();
+          } else {
+            testSeqActive = false;
+            desfireModalState = MODAL_CLOSED;
+            redrawMainScreen();
+          }
+        } else {
+          desfireModalState = MODAL_CLOSED;
+          redrawMainScreen();
+        }
       }
       delay(150);
       return;
@@ -1907,6 +2018,10 @@ void loop() {
         drawButton(btnSettingsBrightDn, TFT_GREEN);
         delay(80);
         drawButton(btnSettingsBrightDn, TFT_DARKGREY);
+      } else if (inside(btnTestSequence, x, y)) {
+        buzzerBeep(80);
+        settingsOpen = false;
+        startTestSequence();
       } else if (inside(btnModalClose, x, y)) {
         buzzerBeep(80);
         settingsOpen = false;
