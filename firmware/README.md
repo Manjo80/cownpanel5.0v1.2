@@ -1013,24 +1013,32 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    unten.
 
 **B) Bisher ungetestete Codepfade:**
-2. ~~AES-128-Authentifizierung (`desfireAuthAes()`)~~ — Testweg jetzt
-   vorbereitet (Version `2026-07-29.18`), **noch nicht an echter
-   Hardware bestätigt.** Neuer Button "APP ERSTELLEN (AES)" legt eine
-   ZWEITE, unabhängige Test-App (AID 0x654321) an, die IMMER
-   `aesKeys=true` verwendet (unabhängig vom Cipher des PICC-Master-Keys,
-   der bei unserer Karte weiterhin 2K3DES ist) — DESFire erlaubt das pro
-   App. Alle anderen Buttons (MASTER-PW SETZEN/AUF STANDARD/APP
-   LOESCHEN/GUTHABEN BUCHEN/NUTZEN/ABFRAGEN) wirken jetzt auf eine
-   "aktive Test-App" (`activeCustomAid`), die von "APP ERSTELLEN" (2K3DES,
-   AID 0x123456) oder "APP ERSTELLEN (AES)" gesetzt wird — beide Apps
-   können gleichzeitig auf der Karte existieren, man wechselt per
-   Tastendruck, welche gerade das Ziel der übrigen Buttons ist. Nächster
-   Test: KARTEN INFO vorher/nachher zur Kontrolle, dann "APP ERSTELLEN
-   (AES)" → MASTER-PW SETZEN → GUTHABEN BUCHEN/NUTZEN/ABFRAGEN gegen die
-   neue AES-App durchspielen, `/desfire_log.txt` + normales Log schicken.
-3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion) — wird vom obigen Test
-   automatisch mitgetestet, sobald "MASTER-PW SETZEN" gegen die aktive
-   AES-App ausgeführt wird (`desfireChangeKeySame()`, `isAes=true`-Zweig).
+2. ~~AES-128-Authentifizierung (`desfireAuthAes()`)~~ — **BESTÄTIGT an
+   echter Hardware** (2026-07-29, 08:00 Uhr, `/desfire_log.txt`):
+   ```
+   -- AID 654321 --
+      Authentifiziert mit Default-Schluessel (AES).
+   ```
+   Der neue Button "APP ERSTELLEN (AES)" (Version `2026-07-29.18`) hat
+   eine unabhängige AES-Test-App (AID `0x654321`) angelegt, und
+   `desfireAuthAes()` hat sich darin zum ersten Mal erfolgreich gegen
+   eine echte Karte authentifiziert. Damit ist der komplette
+   AES-128-Auth-Handshake (`desfireAuthWithKey()`-Fallback-Pfad) an
+   echter Hardware verifiziert.
+3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
+   `isAes=true`) — **noch NICHT bestätigt.** Im selben Testlauf wurde
+   "MASTER-PW SETZEN" gegen die AES-App nicht erfolgreich protokolliert;
+   stattdessen zeigt das Log kurz danach bei "AUF STANDARD" einen noch
+   ungeklärten Fund: `desfireSelectApplication(): APPLICATION_NOT_FOUND
+   (status=0xA0)` für die AES-App, obwohl dieselbe App ~1 Minute vorher
+   per KARTEN INFO noch zweifelsfrei vorhanden war (kein
+   `DeleteApplication` dazwischen im Log). Könnte echtes Antwortmüll-
+   Symptom (siehe Punkt A.1) oder Karte kurz nicht sauber aufgelegen sein
+   -- noch offen, siehe Rückfrage im Chat. **Nächster Test:** "MASTER-PW
+   SETZEN" GEZIELT und ausschließlich gegen die AES-App ausführen (Karte
+   die ganze Zeit ruhig auflegen) und danach GUTHABEN BUCHEN/NUTZEN/
+   ABFRAGEN gegen sie durchspielen, um den ChangeKey-Zweig wirklich zu
+   testen.
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
 4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).
