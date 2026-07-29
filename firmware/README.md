@@ -995,6 +995,17 @@ Terminal-Firmware), nicht hierher:
 - Buchungshistorie (Linear-/Cyclic-Record-Dateien) und alles, was damit
   zusammenhängt (siehe Abschnitt 15).
 - Jegliche Geschäftslogik (Preise, Berechtigungen, Benutzerverwaltung).
+- **App-Auswahl: fest verdrahtete AID statt "aktive"/zuletzt gewählte
+  App.** In dieser Test-Firmware zeigt `activeCustomAid` bewusst
+  einfach auf die zuletzt per "APP ERSTELLEN"/"APP ERSTELLEN (AES)"
+  gewählte App (praktisch, um beide Cipher-Testpfade parallel zu halten
+  -- siehe Abschnitt 15, Testsequenz-Funde zur Verwechslungsgefahr genau
+  dadurch). Im echten Terminal soll das anders sein: eine einzige, fest
+  im Code hinterlegte AID für Auf-/Abbuchen, unabhängig davon, wie viele
+  weitere Apps zufällig auf der Karte liegen -- und im Idealfall sollte
+  auf einer für dieses Terminal ausgegebenen Karte ohnehin nur GENAU
+  EINE Applikation existieren (Nutzervorgabe). Vermeidet die
+  Verwechslungsgefahr strukturell, statt sie nur anzuzeigen wie hier.
 
 ## 15. Stage 6 — Robustheit, Randfälle und verbleibende Board-/Modul-Eigenheiten
 
