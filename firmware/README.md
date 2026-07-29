@@ -989,10 +989,12 @@ dessen, was schon da ist — passend zum eigentlichen Zweck dieses
 Repositories. Geplanter Umfang, geordnet nach Priorität:
 
 **A) Noch offene Bugs (zuerst):**
-1. ~~`GetFileIDs`-Anomalie~~ — Ursache gefunden, Gegenmaßnahme eingebaut,
-   siehe "Ergebnisse der ersten Testrunde" unten. Bitte beim nächsten
-   Auftreten trotzdem nochmal die neuen Log-Zeilen schicken, um die
-   Gegenmaßnahme selbst zu bestätigen.
+1. ~~`GetFileIDs`-Anomalie~~ — Ursache weiterhin nur diagnostiziert (nicht
+   im PN532-Chip behebbar), aber Auswirkung jetzt geklärt: **rein
+   kosmetisch**, keine echte Funktion betroffen. Die ursprüngliche
+   Wiederholungs-Gegenmaßnahme wurde an echter Hardware widerlegt und
+   durch einen zuverlässigeren Filter ersetzt — siehe "Zweite Testrunde"
+   unten.
 
 **B) Bisher ungetestete Codepfade:**
 2. AES-128-Authentifizierung (`desfireAuthAes()`) — nie erfolgreich
@@ -1079,18 +1081,71 @@ Funde dabei:**
    von der unmittelbar vorangegangenen 8-Byte-Authentifizierungsantwort.
    Das ist eine Hardware-/Chip-Eigenheit, kein Software-Bug, und lässt
    sich nicht in der Treiber-Bibliothek reparieren.
-   **Gegenmaßnahme:** `desfireGetFileIDs()` wiederholt die Abfrage bis
-   zu 2x, sobald mehr als 1 Datei gemeldet wird, und übernimmt nur ein
+   **Ursprüngliche Gegenmaßnahme (später widerlegt, siehe "Zweite
+   Testrunde" unten):** `desfireGetFileIDs()` wiederholte die Abfrage bis
+   zu 2x, sobald mehr als 1 Datei gemeldet wurde, und übernahm nur ein
    Ergebnis, das sich in zwei aufeinanderfolgenden Abfragen exakt
-   bestätigt (ein echter Speichermüll-Fehlschlag sollte sich nicht
-   identisch wiederholen). Funktioniert unverändert auch für echte
-   Apps mit mehreren Dateien (z. B. spätere Record-Dateien), solange die
-   Wiederholung dasselbe Ergebnis liefert.
+   bestätigte (Annahme: ein echter Speichermüll-Fehlschlag sollte sich
+   nicht identisch wiederholen).
 
 Punkte A-C brauchen keine neue Hardware und keinen neuen Code (außer
 punktuellen Diagnose-Ergänzungen wie in Nachtrag 7) -- das ist der
 sinnvolle nächste Schritt. D hängt davon ab, welche Zusatz-Hardware
 verfügbar ist.
+
+### Zweite Testrunde: `GetFileIDs`-Gegenmaßnahme widerlegt, wirksamerer Fix
+
+Auf Bitte um erneute Logs nach der ersten Testrunde (`KARTEN INFO`
+mehrfach gedrückt, dazwischen Credit/Debit-Zyklen, `/desfire_log.txt` +
+normales Log vom 2026-07-29, 05:36–05:38 Uhr) zeigte sich: **die
+Wiederholungs-Gegenmaßnahme greift zwar (sichtbar an den
+"Versuch 1"/"Versuch 2"-Logzeilen), löst das Problem aber nicht.** Über
+6 unabhängige Aufrufe hinweg meldete JEDER erste Versuch `len=9`, und
+JEDE Wiederholung ebenfalls `len=9` -- aber mit jedes Mal komplett
+anderen Zufallsbytes. Die beiden Abfragen stimmten also nie überein,
+die Wiederholungsschleife lief immer bis zum Anschlag durch und übergab
+am Ende trotzdem das falsche 9-Dateien-Ergebnis. Das widerlegt die
+ursprüngliche Annahme "ein Speichermüll-Fehlschlag wiederholt sich nicht
+identisch" -- richtig ist eher: **die gemeldete Länge (9) ist
+deterministisch falsch, aber ihr Inhalt ist bei jedem einzelnen Aufruf
+neu zufällig.** Reine Wiederholung bis Übereinstimmung kann das
+strukturell nicht lösen (bräuchte unrealistisch viele Versuche).
+
+Zusätzlich fiel im selben Log ein Folgesymptom auf: in einem Block
+tauchte "Datei 0" zweimal in derselben Dateiliste auf (einmal korrekt am
+Anfang, einmal erneut in der Mitte) -- eines der 8 Zufallsbytes hatte
+zufällig denselben Wert (0x00) wie die echte Dateinummer getroffen.
+
+**Wichtige Erkenntnis bei der Analyse:** `desfireDeepRead()` ruft für
+JEDE gemeldete Dateinummer ohnehin `desfireGetFileSettings()` auf, bevor
+sie angezeigt wird -- und dieser Aufruf schlägt für die erfundenen
+Dateinummern zuverlässig fehl ("GetFileSettings fehlgeschlagen"), während
+er für die echte Datei 0 zuverlässig klappt. Das ist bereits der
+eigentliche, wirksame Filter -- er lief die ganze Zeit im Hintergrund
+mit, wurde nur nicht als solcher genutzt. Und noch wichtiger:
+Credit/Debit/GetValue verwenden alle die fest verdrahtete
+`VALUE_FILE_NO` (Datei 0) und NIE das Ergebnis von `desfireGetFileIDs()`
+-- die Anomalie war **während des gesamten Tests rein kosmetisch** und
+hat keine einzige Buchung oder Guthabenabfrage beeinträchtigt.
+
+**Fix (Version `2026-07-29.17`):**
+- `desfireGetFileIDs()`: Wiederholungslogik entfernt (bringt nachweislich
+  nichts, kostet nur Latenz durch eine zusätzliche RF-Runde). Bei
+  `len > 1` wird weiterhin ein Hex-Dump der rohen Bytes geloggt.
+- `desfireDeepRead()`: nutzt jetzt `GetFileSettings`-Erfolg/Misserfolg
+  als eigentlichen Filter. Zusätzlich Duplikat-Erkennung (überspringt
+  bereits gesehene Dateinummern in derselben Liste). Loggt zusätzlich
+  eine "tatsächlich vorhanden (via GetFileSettings verifiziert)"-Zeile
+  mit der ECHTEN Anzahl statt nur dem rohen (potenziell falschen)
+  PN532-Wert. Die rohe Dateien-Zeile und einzelne
+  "GetFileSettings fehlgeschlagen"-Zeilen werden nur noch geloggt, wenn
+  überhaupt Verdacht besteht (`fileCount > 1`), um das Log bei
+  korrekten Antworten nicht unnötig zu verrauschen.
+
+Noch nicht an echter Hardware gegengetestet -- bitte beim nächsten Test
+wieder `/desfire_log.txt` schicken und prüfen, ob die "tatsächlich
+vorhanden"-Zeile jetzt durchgängig die korrekte Anzahl (1) zeigt, auch
+wenn die rohe PN532-Zeile weiterhin gelegentlich 9 meldet.
 
 ### UX-Umbau (aktives Warten auf Karte, Abschnitt 10): zwei Bugs beim ersten Test gefunden und behoben
 

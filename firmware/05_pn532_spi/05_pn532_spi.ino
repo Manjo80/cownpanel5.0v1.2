@@ -196,7 +196,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.16";
+const char *FIRMWARE_VERSION = "2026-07-29.17";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -1049,14 +1049,34 @@ void desfireDeepRead() {
 
     uint8_t fileIds[32];
     uint8_t fileCount = desfireGetFileIDs(fileIds, 32);
-    if (haveLog) log.printf("   Dateien: %u\n", fileCount);
+    if (fileCount > 1 && haveLog) {
+      log.printf("   Dateien (PN532-Rohwert, siehe Stage 6 GetFileIDs-Anomalie): %u\n", fileCount);
+    }
 
+    uint8_t verifiedCount = 0;
     for (uint8_t f = 0; f < fileCount; f++) {
+      // Duplikate ueberspringen: bei der GetFileIDs-Anomalie kann ein
+      // erfundenes Byte zufaellig mit einer bereits gesehenen echten
+      // Datei-ID uebereinstimmen (z. B. Datei 0 zweimal in einer Liste,
+      // siehe /desfire_log.txt vom 2026-07-29, 05:37:46 Uhr).
+      bool alreadySeen = false;
+      for (uint8_t p = 0; p < f; p++) {
+        if (fileIds[p] == fileIds[f]) { alreadySeen = true; break; }
+      }
+      if (alreadySeen) continue;
+
       DesfireFileSettings fs;
       if (!desfireGetFileSettings(fileIds[f], fs)) {
-        if (haveLog) log.printf("   Datei %u: GetFileSettings fehlgeschlagen.\n", fileIds[f]);
+        // Kein echter Fehler einer echten Datei -- an echter Hardware sind
+        // das durchweg erfundene Datei-IDs aus der GetFileIDs-Anomalie
+        // (siehe desfireGetFileIDs()), GetFileSettings ist hier der
+        // eigentliche Filter. Nur bei Verdacht (fileCount>1) ins Log.
+        if (haveLog && fileCount > 1) {
+          log.printf("   Datei %u: GetFileSettings fehlgeschlagen (vermutlich PN532-Anomalie, ignoriert).\n", fileIds[f]);
+        }
         continue;
       }
+      verifiedCount++;
       const char *typeName = fs.fileType == 0x00 ? "Standard Data"
                             : fs.fileType == 0x01 ? "Backup Data"
                             : fs.fileType == 0x02 ? "Value"
@@ -1089,6 +1109,7 @@ void desfireDeepRead() {
         if (fs.commMode == 0x01) log.println("     (MACed -- MAC/CMAC wurde NICHT geprueft, nur Rohdaten gezeigt)");
       }
     }
+    if (haveLog) log.printf("   Dateien tatsaechlich vorhanden (via GetFileSettings verifiziert): %u\n", verifiedCount);
   }
 
   if (haveLog) log.close();
