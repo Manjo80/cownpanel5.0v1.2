@@ -1129,17 +1129,24 @@ nichts geändert). **Zwei getrennte Funde beim Aufklären, nicht einer:**
    Noch nicht an echter Hardware bestätigt.
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
-4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).
+4. ~~`Debit` unter die Untergrenze~~ — **BESTÄTIGT**, funktioniert wie
+   vorgesehen (Karte lehnt ab, `BOUNDARY_ERROR`, kein eigener
+   Vorab-Check nötig).
 5. `GetValue` direkt nach `Credit`, aber vor `CommitTransaction` --
    zeigt das den alten oder den neuen Wert?
-6. Karte mitten in einem mehrstufigen Vorgang (Auth, ChangeKey,
-   CreateApplication, Credit vor Commit) wegziehen -- sauberer
-   Fehlschlag ohne Hänger/Absturz?
+6. ~~Karte mitten in einem mehrstufigen Vorgang wegziehen~~ — getestet
+   (oft): teils Fehlermeldung, aber Aktion ging trotzdem durch, teils
+   Fehlermeldung UND Aktion ging wirklich nicht durch — beides erwartetes
+   Verhalten (RF-Unterbrechung kann vor ODER nach der kartenseitigen
+   Verarbeitung passieren, siehe Abschnitt 12 Nachtrag 7). Auf
+   Nutzerwunsch jetzt eine **Verifikationsebene** eingebaut statt das von
+   Hand nachschauen zu müssen, siehe "Neu: Verifikationsebene" unten.
 7. Viele Zyklen hintereinander (Master-Key setzen/zurücksetzen, App
    erstellen/löschen) -- Stabilität über Zeit, kein Speicherleck, kein
    ESP32-Reset.
 8. ESP-NOW-Traffic von einem zweiten Board UND DESFire-Vorgänge
-   gleichzeitig -- Timing-Interferenzen?
+   gleichzeitig -- Timing-Interferenzen? **Jetzt testbar:** zweites Panel
+   vorhanden.
 
 **D) Hardware-Varianz (abhängig von Beschaffung):**
 9. Andere Kartengrößen (4K/8K/16K statt der bisher getesteten 2K) --
@@ -1166,7 +1173,8 @@ nichts geändert). **Zwei getrennte Funde beim Aufklären, nicht einer:**
 11. Ein zweites PN532-Modul (andere Charge/anderer Anbieter) -- das im
     Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
     Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
-    Hardware ausschließen oder bestätigen.
+    Hardware ausschließen oder bestätigen. **Jetzt testbar:** zweites
+    PN532-Modul vorhanden (zusätzlich zum zweiten Panel für Punkt C.8).
 
 ### Ergebnisse der ersten Testrunde
 
@@ -1305,3 +1313,47 @@ wenn die rohe PN532-Zeile weiterhin gelegentlich 9 meldet.
 
 Beide Fixes sind bisher NICHT an echter Hardware gegengetestet (Version
 `2026-07-28.16`).
+
+### Neu: Verifikationsebene bei Fehlschlag (Version `2026-07-29.22`)
+
+Nach mehrfachem Testen von Punkt C.6 (Karte mitten im Vorgang wegziehen)
+bestätigte sich das erwartete, aber unangenehme Muster: teils
+Fehlermeldung, obwohl die Aktion doch durchging, teils Fehlermeldung UND
+die Aktion ging wirklich nicht durch — von außen nicht unterscheidbar,
+ohne von Hand nachzuschauen (KARTEN INFO, Werte vergleichen). Auf
+Nutzerwunsch ("das beste wäre eine Bestätigungsebene in den Code
+einzubauen: bei Fehlschlag wird beim erneuten Auflegen kontrolliert, ob
+geschrieben oder nicht") jetzt eingebaut, für alle Aktionen, bei denen
+ein Fehlschlag grundsätzlich ambig sein kann (`MASTER-PW SETZEN`,
+`AUF STANDARD`, `APP ERSTELLEN`/`(AES)`, `APP LOESCHEN`,
+`GUTHABEN BUCHEN`/`NUTZEN`) — NICHT bei einer von der Karte explizit
+abgelehnten Buchung (`BOUNDARY_ERROR` bei zu wenig Guthaben, siehe
+Punkt C.4 — das ist eindeutig, keine Verifikation nötig.
+
+**Ablauf:** Meldet eine dieser Aktionen einen Fehlschlag, zeigt das
+Ergebnisfenster zusätzlich zu SCHLIESSEN einen Button
+**"TROTZDEM PRÜFEN"**. Antippen → Karte erneut auflegen → statt der
+ursprünglichen Aktion läuft jetzt ein gezielter Kontroll-Check:
+- `APP ERSTELLEN`/`(AES)`: `SelectApplication` auf die Ziel-AID —
+  existiert sie jetzt, ist das Anlegen doch durchgegangen.
+- `APP LOESCHEN`: `SelectApplication` auf die aktive Test-App — schlägt
+  das jetzt fehl (`APPLICATION_NOT_FOUND`), ist das Löschen doch
+  durchgegangen.
+- `MASTER-PW SETZEN`/`AUF STANDARD`: erneute Authentifizierung, geprüft
+  wird, ob dabei der NEUE (Custom- bzw. Werks-) Schlüssel greift.
+- `GUTHABEN BUCHEN`/`NUTZEN`: der Guthabenstand wird jetzt bereits VOR
+  jedem Buchungsversuch gemerkt (`desfireValueBeforeOp`); die
+  Verifikation liest den aktuellen Stand erneut und vergleicht ihn mit
+  "vorher" bzw. "vorher ± 100", um zu unterscheiden.
+
+Das Ergebnis ("war TROTZDEM erfolgreich" / "wirklich fehlgeschlagen" /
+"nicht eindeutig feststellbar") erscheint im Ergebnisfenster UND landet
+zusätzlich in einer neuen, eigenen Sammel-Logdatei `/stage6_log.txt`
+(ergänzt weiterhin auch das normale Log-Fenster/Tageslog, verschwindet
+also nirgends) — auf Nutzerwunsch, damit sich diese Randfall-Funde nicht
+in den täglichen Logs verlieren. Bewusst KEINE vollautomatische
+Wiederholung der eigentlichen Aktion (das wäre bei einem ChangeKey/
+CreateApplication riskant, siehe Sicherheitshinweis Abschnitt 10) — nur
+Lesen/Prüfen, nie ein zweiter Schreibversuch.
+
+Noch nicht an echter Hardware getestet.
