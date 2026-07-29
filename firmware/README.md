@@ -1083,18 +1083,39 @@ manuellen Reihenfolge lag, nicht an einem Codepfad.
 Direkt NACH der Sequenz (APP LOESCHEN ist bewusst nicht automatisiert,
 siehe oben) meldete "APP LOESCHEN" für die AES-App einmalig
 `APPLICATION_NOT_FOUND`, obwohl dieselbe App Sekunden vorher per KARTEN
-INFO noch zweifelsfrei vorhanden war. Der Tester musste danach erst
-"APP ERSTELLEN (AES)" erneut antippen (bestätigte korrekt
-`DUPLICATE_ERROR` -- die App war die ganze Zeit noch da), um danach
-erfolgreich löschen zu können. Das passt zum selben PN532-
-Antwortmüll-Verdacht wie die `GetFileIDs`-Anomalie (Punkt A.1) und dem
-in Abschnitt 12/Nachtrag 7 dokumentierten Fall ("App trotz gemeldetem
-Fehlschlag angelegt") — vermutlich verfälscht der PN532-Chip
-gelegentlich auch den `DeleteApplication`-Statuscode.
-**Gegenmaßnahme (Version `2026-07-29.20`):** `desfireOpDeleteApp()`
-versucht bei einem Fehlschlag automatisch EINMAL erneut, bevor es
-aufgibt — spart den manuellen Nachfass-Umweg über "APP ERSTELLEN".
-Noch nicht an echter Hardware bestätigt.
+INFO noch zweifelsfrei vorhanden war (`activeCustomAid` zeigte zu diesem
+Zeitpunkt nachweislich noch auf `654321` -- seit Schritt 9 der Sequenz
+nichts geändert). **Zwei getrennte Funde beim Aufklären, nicht einer:**
+
+1. **Der eigentliche Fehlschlag** passt zum selben PN532-Antwortmüll-
+   Verdacht wie die `GetFileIDs`-Anomalie (Punkt A.1) und dem in
+   Abschnitt 12/Nachtrag 7 dokumentierten Fall ("App trotz gemeldetem
+   Fehlschlag angelegt") — vermutlich verfälscht der PN532-Chip
+   gelegentlich auch den `DeleteApplication`-Statuscode.
+   **Gegenmaßnahme (Version `2026-07-29.20`):** `desfireOpDeleteApp()`
+   versucht bei einem Fehlschlag automatisch EINMAL erneut, bevor es
+   aufgibt.
+2. **Echter UX-Bug beim Nachfassen, gefunden durch Nachfrage beim
+   Tester:** Um zu prüfen, ob die App noch existiert, wurde "APP
+   ERSTELLEN" (die 2K3DES-Variante, nicht "APP ERSTELLEN (AES)")
+   angetippt -- Log bestätigt `desfireOpCreateApp(): ... DUPLICATE_ERROR`
+   statt `desfireOpCreateAppAes()`. Problem: `desfireOpCreateApp()` ruft
+   `setActiveCustomAid(CUSTOM_AID)` **unbedingt** auf, auch bei
+   Fehlschlag/Duplikat -- dadurch zeigte "APP LOESCHEN" danach unbemerkt
+   auf die 2K3DES- statt die AES-App, ohne dass das irgendwo sichtbar
+   war. Der Tester vermutete zunächst einen Speicher-/Tracking-Fehler
+   ("App wird gelöscht, aber die andere ist nicht mehr im Speicher") --
+   tatsächlich war es genau diese stille Umschaltung.
+   **Gegenmaßnahme (Version `2026-07-29.21`):** Bestätigungsfenster
+   zeigt jetzt für alle auf `activeCustomAid` wirkenden Aktionen (MASTER-
+   PW SETZEN/AUF STANDARD/APP LOESCHEN/GUTHABEN BUCHEN/NUTZEN/ABFRAGEN)
+   zusätzlich "Ziel: aktive Test-App `<AID>`", bevor man AUSFÜHREN
+   antippt -- eine vollständige App-Auswahl (Nutzervorschlag: Apps
+   abfragen und manuell wählen) wäre die "richtige" Lösung, aber laut
+   Tester selbst nicht das eigentliche Thema dieses Repositories
+   (Board-/Modul-Quirks, nicht Terminal-UX) — die sichtbare Zielzeile
+   behebt die konkrete Verwechslungsgefahr mit deutlich weniger Aufwand.
+   Noch nicht an echter Hardware bestätigt.
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
 4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).

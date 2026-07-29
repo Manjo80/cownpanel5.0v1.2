@@ -197,7 +197,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-29.20";
+const char *FIRMWARE_VERSION = "2026-07-29.21";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -842,6 +842,22 @@ void drawDesfireModalFrame() {
 // einer Testsequenz zusaetzlich der Grund, warum dieser Schritt in der
 // Sequenz steckt (TEST_SEQUENCE[...].note), und ein Hinweis, dass
 // ABBRECHEN die GESAMTE Sequenz beendet statt nur diesen Schritt.
+//
+// Zeigt fuer alle Aktionen, die auf activeCustomAid wirken, zusaetzlich
+// "Ziel: aktive Test-App <AID>" -- gefunden nach einem echten
+// Verwirrungsfall an echter Hardware (2026-07-29): "APP ERSTELLEN"
+// (2K3DES) als Test gedrueckt (in der Annahme, es aendere nichts, wenn
+// die App eh schon existiert -- DUPLICATE_ERROR), aber setActiveCustomAid()
+// wird dort UNBEDINGT aufgerufen, auch bei Fehlschlag. Damit zeigte
+// "APP LOESCHEN" danach unbemerkt auf die 2K3DES- statt die AES-App.
+// Diese Zeile macht das VOR dem Tastendruck sichtbar, statt eine
+// vollstaendige App-Auswahl zu bauen (waere fuer dieses Testprojekt
+// Overkill, siehe firmware/README.md).
+bool desfireActionUsesActiveApp(DesfireAction action) {
+  return action == DESFIRE_ACTION_SET_MASTER_KEY || action == DESFIRE_ACTION_RESET_MASTER_KEY ||
+         action == DESFIRE_ACTION_DELETE_APP || action == DESFIRE_ACTION_CREDIT ||
+         action == DESFIRE_ACTION_DEBIT || action == DESFIRE_ACTION_GET_VALUE;
+}
 void drawDesfireModalConfirm() {
   drawDesfireModalFrame();
   canvas.setTextSize(1.5);
@@ -849,6 +865,12 @@ void drawDesfireModalConfirm() {
   int y = MODAL_Y + 60 + (testSeqActive ? 22 : 0); // +22: Titel ist waehrend der Sequenz zweizeilig
   y += printWrapped(DESFIRE_ACTIONS[desfireModalAction].description,
                      MODAL_X + 16, y, MODAL_W - 32, 20) * 20;
+  if (desfireActionUsesActiveApp(desfireModalAction)) {
+    canvas.setTextColor(TFT_ORANGE);
+    canvas.setCursor(MODAL_X + 16, y + 6);
+    canvas.printf("Ziel: aktive Test-App %s\n", activeAidLabel);
+    y += 26;
+  }
   if (testSeqActive) {
     canvas.setTextColor(TFT_CYAN);
     y += printWrapped(TEST_SEQUENCE[testSeqIndex].note, MODAL_X + 16, y + 6, MODAL_W - 32, 20) * 20;
