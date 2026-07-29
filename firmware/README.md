@@ -1023,10 +1023,24 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
 9. Andere Kartengrößen (4K/8K/16K statt der bisher getesteten 2K) --
    siehe Antwort weiter oben im Gespräch, sollte laut Code-Analyse ohne
    Änderung funktionieren, aber nie an echter größerer Karte bestätigt.
-10. Eine echte EV1- oder EV2-Karte, falls verfügbar -- unsere
-    Kompatibilitäts-Annahme (Abschnitt 12, Antwort zu "EV1 vs. EV2 vs.
-    EV3") ist bisher nur protokoll-logisch begründet, nicht unabhängig
-    bestätigt.
+10. ~~Eine echte EV1- oder EV2-Karte, falls verfügbar~~ -- per NXP
+    TagInfo-App bestätigt: die bisherige Testkarte ist bereits ein
+    **EV3-Chip** (IC Name "EV3", 2048 Byte, Major-Version 0x33 = 51,
+    passt zu unserem geloggten `Version=51.0`) -- also die neueste
+    Generation, kein EV1/EV2. Unsere Kompatibilitäts-Annahme (Abschnitt
+    12, Antwort zu "EV1 vs. EV2 vs. EV3") war also am tatsächlich
+    verwendeten Kartentyp die ganze Zeit im Einsatz, nicht nur
+    protokoll-logisch begründet. Ein echtes EV1/EV2-Exemplar wäre
+    trotzdem noch interessant, ist aber nicht mehr die Standardkarte für
+    diesen Test.
+    Nebenbefund aus derselben TagInfo-Prüfung: NXP bietet zusätzlich zur
+    (offline laufenden) asymmetrischen Signaturprüfung eine
+    AES-basierte "symmetrische Originalitätsprüfung" gegen NXP-
+    Backend-Server an -- **nur dieses eine NXP-Feature** braucht
+    Internet. Unsere eigene DESFire-AES-Authentifizierung
+    (`desfireAuthAes()`, Slot 0, eigener Schlüssel) läuft komplett
+    lokal über PN532 ↔ Karte und braucht zu keinem Zeitpunkt eine
+    Internetverbindung.
 11. Ein zweites PN532-Modul (andere Charge/anderer Anbieter) -- das im
     Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
     Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
