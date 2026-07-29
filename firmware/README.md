@@ -1314,7 +1314,7 @@ wenn die rohe PN532-Zeile weiterhin gelegentlich 9 meldet.
 Beide Fixes sind bisher NICHT an echter Hardware gegengetestet (Version
 `2026-07-28.16`).
 
-### Neu: Verifikationsebene bei Fehlschlag (Version `2026-07-29.23`)
+### Neu: Verifikationsebene bei Fehlschlag (Version `2026-07-29.24`)
 
 Nach mehrfachem Testen von Punkt C.6 (Karte mitten im Vorgang wegziehen)
 bestätigte sich das erwartete, aber unangenehme Muster: teils
@@ -1366,15 +1366,51 @@ Piepen passiert weiterhin nur EIN Mal ganz am Ende (Nutzerwunsch aus
 Abschnitt 10) -- beim ursprünglichen, noch unklaren Fehlschlag bleibt es
 still, erst das Verifikationsergebnis piept.
 
-Das Ergebnis ("war TROTZDEM erfolgreich" / "wirklich fehlgeschlagen" /
-"nicht eindeutig feststellbar") erscheint im Ergebnisfenster UND landet
-zusätzlich in einer eigenen Sammel-Logdatei `/stage6_log.txt` (ergänzt
-weiterhin auch das normale Log-Fenster/Tageslog, verschwindet also
-nirgends) — auf Nutzerwunsch, damit sich diese Randfall-Funde nicht in
-den täglichen Logs verlieren. Bewusst KEINE automatische Wiederholung
-der eigentlichen Aktion (das wäre bei einem ChangeKey/CreateApplication
-riskant, siehe Sicherheitshinweis Abschnitt 10) — nur Lesen/Prüfen, nie
-ein zweiter Schreibversuch. ABBRECHEN im Wartezustand bricht die
-Verifikation weiterhin jederzeit ab.
+Jeder Verifikations-Schritt landet zusätzlich in einer eigenen
+Sammel-Logdatei `/stage6_log.txt` (ergänzt weiterhin auch das normale
+Log-Fenster/Tageslog, verschwindet also nirgends) — auf Nutzerwunsch,
+damit sich diese Randfall-Funde nicht in den täglichen Logs verlieren.
+ABBRECHEN im Wartezustand bricht die Verifikation weiterhin jederzeit ab.
+
+**Ergebnis-Verhalten (überarbeitet, Version `2026-07-29.24`):**
+- **War TROTZDEM erfolgreich** (Kontroll-Check zeigt: die Aktion ist
+  schon durch) → wird als solches gemeldet, nichts weiter zu tun.
+- **Wirklich fehlgeschlagen** → auf Nutzerwunsch NICHT mehr nur
+  gemeldet, sondern die Aktion wird jetzt automatisch RICHTIG
+  nachgeholt (`desfireRunModalAction()` erneut aufgerufen, mit
+  derselben, schon aufliegenden Karte) — das Ergebnisfenster zeigt dann
+  die normale Erfolgsmeldung der jeweiligen Aktion (z. B. "App 123456
+  erstellt (Guthaben 0, jetzt aktiv)" oder "Guthaben gebucht (+100)")
+  statt eines bloßen "fehlgeschlagen". Schlägt auch DIESER Versuch
+  fehl, beginnt automatisch eine weitere Verifikationsrunde (derselbe
+  Ablauf, erneutes Auflegen nötig) — kein Software-Loop ohne
+  physisches Zutun, da jede Runde eine neue Kartenerkennung braucht.
+  Ursprünglich bewusst als reine Lese-Prüfung ohne Schreibversuch
+  gebaut (Sicherheitshinweis Abschnitt 10, ChangeKey-Framing) — nach
+  dem ersten kompletten Testlauf (Abschnitt 15, TEST-SEQUENZ) ist die
+  ChangeKey-Implementierung für beide Cipher an echter Hardware
+  bestätigt, ein wiederholter Versuch birgt also kein zusätzliches
+  Risiko mehr gegenüber dem ursprünglichen Versuch.
+- **Nicht eindeutig feststellbar** (z. B. UID unbekannt und
+  Kontroll-Check selbst schlägt fehl) → bewusst weiterhin KEIN
+  automatischer Versuch, nur der Hinweis, es erneut zu versuchen --
+  hier wäre ein blinder Schreibversuch riskant (z. B. bei Guthaben
+  ein möglicher Doppel-Credit, falls die Buchung entgegen der
+  Vermutung doch schon durch war).
 
 Noch nicht an echter Hardware getestet.
+
+### Offene Frage: wird die 2K3DES-Test-App (`CUSTOM_AID`, 0x123456) noch gebraucht?
+
+Vom Tester aufgeworfen, nachdem wiederholt Verwechslungen beim Löschen
+zwischen den beiden Test-Apps auftraten (siehe "Ziel: aktive Test-App"-
+Fix weiter oben). Jetzt, wo sowohl 2K3DES als auch AES vollständig
+bestätigt sind (Authentifizierung + ChangeKey + Credit/Debit, siehe
+Abschnitt B), bringt das gleichzeitige Vorhalten BEIDER Apps kaum noch
+zusätzlichen Testwert, aber definitiv zusätzliches Verwechslungsrisiko
+(welche App ist gerade aktiv?). Spricht außerdem für die in Abschnitt 14
+festgehaltene Terminal-Design-Vorgabe (nur eine App pro Karte). Noch
+nicht entschieden -- Optionen: (a) 2K3DES-App und ihren Button ganz aus
+Firmware/TEST-SEQUENZ entfernen, nur noch AES testen; (b) behalten für
+gelegentliche Cross-Cipher-Regressionstests, aber aus der TEST-SEQUENZ
+rausnehmen; (c) so lassen wie jetzt.
