@@ -1013,24 +1013,56 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    unten.
 
 **B) Bisher ungetestete Codepfade:**
-2. ~~AES-128-Authentifizierung (`desfireAuthAes()`)~~ — Testweg jetzt
-   vorbereitet (Version `2026-07-29.18`), **noch nicht an echter
-   Hardware bestätigt.** Neuer Button "APP ERSTELLEN (AES)" legt eine
-   ZWEITE, unabhängige Test-App (AID 0x654321) an, die IMMER
-   `aesKeys=true` verwendet (unabhängig vom Cipher des PICC-Master-Keys,
-   der bei unserer Karte weiterhin 2K3DES ist) — DESFire erlaubt das pro
-   App. Alle anderen Buttons (MASTER-PW SETZEN/AUF STANDARD/APP
-   LOESCHEN/GUTHABEN BUCHEN/NUTZEN/ABFRAGEN) wirken jetzt auf eine
-   "aktive Test-App" (`activeCustomAid`), die von "APP ERSTELLEN" (2K3DES,
-   AID 0x123456) oder "APP ERSTELLEN (AES)" gesetzt wird — beide Apps
-   können gleichzeitig auf der Karte existieren, man wechselt per
-   Tastendruck, welche gerade das Ziel der übrigen Buttons ist. Nächster
-   Test: KARTEN INFO vorher/nachher zur Kontrolle, dann "APP ERSTELLEN
-   (AES)" → MASTER-PW SETZEN → GUTHABEN BUCHEN/NUTZEN/ABFRAGEN gegen die
-   neue AES-App durchspielen, `/desfire_log.txt` + normales Log schicken.
-3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion) — wird vom obigen Test
-   automatisch mitgetestet, sobald "MASTER-PW SETZEN" gegen die aktive
-   AES-App ausgeführt wird (`desfireChangeKeySame()`, `isAes=true`-Zweig).
+2. ~~AES-128-Authentifizierung (`desfireAuthAes()`)~~ — **BESTÄTIGT an
+   echter Hardware** (2026-07-29, 08:00 Uhr, `/desfire_log.txt`):
+   ```
+   -- AID 654321 --
+      Authentifiziert mit Default-Schluessel (AES).
+   ```
+   Der neue Button "APP ERSTELLEN (AES)" (Version `2026-07-29.18`) hat
+   eine unabhängige AES-Test-App (AID `0x654321`) angelegt, und
+   `desfireAuthAes()` hat sich darin zum ersten Mal erfolgreich gegen
+   eine echte Karte authentifiziert. Damit ist der komplette
+   AES-128-Auth-Handshake (`desfireAuthWithKey()`-Fallback-Pfad) an
+   echter Hardware verifiziert.
+3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
+   `isAes=true`) — **noch NICHT bestätigt.** Der `APPLICATION_NOT_FOUND`-
+   Fund im selben Testlauf (siehe vorherige Fassung dieses Abschnitts) war
+   laut Rückmeldung des Testers **kein Firmware-Bug**, sondern
+   durcheinandergeratene manuelle Testreihenfolge (u. a. wurde
+   ausprobiert, was beim erneuten "APP ERSTELLEN" auf eine bereits
+   bestehende App passiert -- korrekt als `DUPLICATE_ERROR` erkannt).
+   Nächster Test jetzt über die neue TEST-SEQUENZ (siehe unten) statt von
+   Hand, damit die Reihenfolge garantiert stimmt.
+
+**Neu: automatisierte TEST-SEQUENZ (Version `2026-07-29.19`).** Auf
+Nutzerwunsch, nachdem manuelles Testen in falscher Reihenfolge zu einem
+schwer einzuordnenden Log geführt hatte ("Idealerweise machst du mir
+einen Testbutton, der alles nacheinander testet, wie es gebraucht wird,
+mit Rückfragen Karte hin/Karte weg"): neuer Button "TEST-SEQUENZ (STAGE
+6)" im EINSTELLUNGEN-Untermenü (auf dem Hauptbildschirm war kein Platz
+mehr für einen 10. Button) führt **15 Schritte automatisch
+nacheinander** aus -- jeder Schritt eine eigene, ganz normale
+Kartenauflage (bewusst KEINE durchgehende RF-Sitzung über alle Schritte,
+sondern echtes Auflegen/Erkennen pro Schritt, entspricht realer
+Terminal-Nutzung):
+
+1. KARTEN INFO (Ausgangszustand) → 2. AUF STANDARD → 3. APP ERSTELLEN
+(2K3DES) → 4. MASTER-PW SETZEN → 5. GUTHABEN BUCHEN → 6. GUTHABEN NUTZEN
+→ 7. GUTHABEN ABFRAGEN (Kontrolle) → 8. AUF STANDARD → 9. APP ERSTELLEN
+(AES) → 10. MASTER-PW SETZEN (**AES-ChangeKey, bisher unbestätigt**) →
+11. GUTHABEN BUCHEN → 12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN
+(Kontrolle) → 14. AUF STANDARD → 15. KARTEN INFO (Endzustand).
+
+Jeder Schritt zeigt "Schritt X/15:" im Fenstertitel, den Grund, warum er
+in der Sequenz steckt, und danach wie gewohnt AUSFÜHREN → Karte auflegen
+→ Ergebnis. Statt SCHLIESSEN zeigt das Ergebnisfenster **NÄCHSTER
+SCHRITT** (bzw. **TESTSEQUENZ FERTIG** beim letzten Schritt) und springt
+automatisch zum nächsten Schritt weiter. **ABBRECHEN beendet an jedem
+Punkt die GESAMTE Sequenz**, nicht nur den aktuellen Schritt (rot
+hervorgehoben). Löschende Schritte (APP LOESCHEN) sind bewusst NICHT
+Teil der Sequenz -- Löschen bleibt ein separater, gezielter
+Tastendruck.
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
 4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).
