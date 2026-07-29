@@ -203,37 +203,32 @@ inline uint8_t desfireGetFileIDs(uint8_t fileIds[], uint8_t maxFiles) {
     return 0;
   }
   // An echter Hardware wurden hier schon deutlich mehr "Dateien" gemeldet
-  // als je angelegt wurden (bis zu 9 statt der erwarteten 1, mit klar
-  // unplausiblen Dateinummern wie 218) -- der Adafruit-Treiber uebernimmt
-  // die Laenge nur, wenn die vom PN532-CHIP SELBST mitgesendete
+  // als je angelegt wurden (durchgaengig genau 9 statt der erwarteten 1,
+  // mit klar unplausiblen Dateinummern wie 218) -- der Adafruit-Treiber
+  // uebernimmt die Laenge nur, wenn die vom PN532-CHIP SELBST mitgesendete
   // Laengen-Pruefsumme (LCS) passt (siehe Adafruit_PN532.cpp,
   // inDataExchange()), das Problem liegt also vermutlich im PN532-
-  // internen Zielantwortspeicher (Restdaten des vorangegangenen 8-Byte-
-  // Authentifizierungsaustauschs), nicht im Treiber oder unserem Code
-  // (siehe firmware/README.md, Abschnitt "Stage 6"). Ein echter
-  // Speichermuell-Fehlschlag wiederholt sich vermutlich nicht IDENTISCH
-  // -- deshalb: bei verdaechtig hoher Anzahl (>1) die Abfrage bis zu 2x
-  // wiederholen und nur ein Ergebnis uebernehmen, das sich in zwei
-  // aufeinanderfolgenden Abfragen exakt bestaetigt.
-  for (int attempt = 1; len > 1 && attempt <= 2; attempt++) {
-    logMsg("desfireGetFileIDs(): len=%u (Versuch %d, mehr als die erwartete 1 Datei) -- pruefe erneut", len, attempt);
+  // internen Zielantwortspeicher, nicht im Treiber oder unserem Code
+  // (siehe firmware/README.md, Abschnitt "Stage 6").
+  //
+  // Getestet und VERWORFEN: Wiederholung bis zwei Abfragen exakt
+  // uebereinstimmen -- an echter Hardware blieb die Laenge ueber >6
+  // unabhaengige Aufrufe hinweg IMMER exakt 9, aber der Karteninhalt der
+  // zusaetzlichen 8 Byte war JEDES MAL anders (siehe /desfire_log.txt vom
+  // 2026-07-29, 05:36-05:38 Uhr) -- die beiden Abfragen stimmen darum
+  // praktisch nie ueberein, die Wiederholung bringt nichts ausser Latenz.
+  // Die tatsaechliche Filterung passiert deshalb NICHT hier, sondern in
+  // desfireDeepRead(): dort wird pro gemeldeter Datei-ID zusaetzlich
+  // GetFileSettings() aufgerufen, was fuer die erfundenen IDs zuverlaessig
+  // fehlschlaegt und fuer die echte(n) Datei(en) zuverlaessig klappt --
+  // das ist der eigentliche Filter. Auswirkung auf echte Funktionen: KEINE
+  // -- Credit/Debit/GetValue verwenden immer die feste VALUE_FILE_NO und
+  // nie das Ergebnis von GetFileIDs, das Problem ist rein kosmetisch im
+  // Tiefenauslesungs-Log sichtbar.
+  if (len > 1) {
+    logMsg("desfireGetFileIDs(): len=%u (mehr als die erwartete 1 Datei) -- "
+           "vermutlich PN532-Anomalie, wird ueber GetFileSettings gefiltert.", len);
     logHex("rohe Datei-IDs", buf, len < 32 ? len : 32);
-
-    uint8_t buf2[32];
-    uint16_t len2 = 0;
-    uint8_t status2 = desfireTransceive(0x6F, nullptr, 0, buf2, &len2, sizeof(buf2));
-    if (status2 != 0x00) {
-      logMsg("desfireGetFileIDs(): Wiederholung fehlgeschlagen (status=0x%02X)", status2);
-      break;
-    }
-    if (len2 == len && memcmp(buf, buf2, len) == 0) {
-      logMsg("desfireGetFileIDs(): Wiederholung bestaetigt dasselbe Ergebnis -- wird uebernommen.");
-      break;
-    }
-    logMsg("desfireGetFileIDs(): Wiederholung ergab ein ANDERES Ergebnis (len=%u) -- "
-           "vermutlich war die vorherige Antwort PN532-Speichermuell.", len2);
-    memcpy(buf, buf2, len2 < sizeof(buf2) ? len2 : sizeof(buf2));
-    len = len2;
   }
   uint8_t count = len;
   if (count > maxFiles) count = maxFiles;
