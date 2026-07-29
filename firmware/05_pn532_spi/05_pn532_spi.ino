@@ -196,7 +196,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-29.23";
+const char *FIRMWARE_VERSION = "2026-07-29.24";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -1746,6 +1746,27 @@ void desfireOpCardInfo() {
   desfireOpFinish(true);
 }
 
+// Fuehrt die zum aktuell gewaehlten Fenster gehoerende DESFire-Aktion aus
+// (siehe DesfireModalState/loop()) -- muss NACH den desfireOpXxx()-
+// Funktionen stehen: anders als beim .ino-Build (Arduino-IDE, automatische
+// Funktions-Prototypen) generiert PlatformIOs main.cpp-Build KEINE
+// Prototypen, Vorwaertsreferenzen auf spaeter im File definierte
+// Funktionen wuerden dort nicht kompilieren.
+void desfireRunModalAction(DesfireAction action) {
+  switch (action) {
+    case DESFIRE_ACTION_SET_MASTER_KEY:   desfireOpSetMasterKey(); break;
+    case DESFIRE_ACTION_RESET_MASTER_KEY: desfireOpResetMasterKey(); break;
+    case DESFIRE_ACTION_CREATE_APP:       desfireOpCreateApp(); break;
+    case DESFIRE_ACTION_CREATE_APP_AES:   desfireOpCreateAppAes(); break;
+    case DESFIRE_ACTION_DELETE_APP:       desfireOpDeleteApp(); break;
+    case DESFIRE_ACTION_CREDIT:           desfireOpCredit(); break;
+    case DESFIRE_ACTION_DEBIT:            desfireOpDebit(); break;
+    case DESFIRE_ACTION_GET_VALUE:        desfireOpGetValue(); break;
+    case DESFIRE_ACTION_CARD_INFO:        desfireOpCardInfo(); break;
+    default: break;
+  }
+}
+
 // Verifikationsebene (siehe desfireOfferVerify-Kommentar oben): wird nach
 // erneutem Kartenauflegen NACH einem gemeldeten Fehlschlag aufgerufen
 // (statt der eigentlichen Aktion, siehe loop()) -- prueft anhand des
@@ -1753,7 +1774,9 @@ void desfireOpCardInfo() {
 // desfireOpBegin() noetig (die Karte ist schon aktiviert, siehe
 // loop()), aber das Aktivierungs-Flag muss trotzdem konsumiert werden,
 // sonst haelt sich desfireCardAlreadyActivated faelschlich fuer die
-// naechste, ganz andere Aktion.
+// naechste, ganz andere Aktion. Muss NACH desfireRunModalAction() stehen
+// (ruft es im "wirklich fehlgeschlagen"-Zweig auf), sonst Build-Fehler
+// unter PlatformIO (siehe Kommentar dort).
 void desfireVerifyFailedAction(DesfireAction action) {
   desfireCardAlreadyActivated = false;
   desfireOfferVerify = false; // diese Aktion ist jetzt final geklaert, kein erneutes Verify-Angebot
@@ -1793,38 +1816,29 @@ void desfireVerifyFailedAction(DesfireAction action) {
     }
   }
 
-  if (determined) {
-    stage6Log("Verifikation \"%s\" (App %s): %s%s", DESFIRE_ACTIONS[action].title, activeAidLabel,
-              wentThroughAnyway ? "TROTZ gemeldetem Fehlschlag durchgegangen" : "wirklich fehlgeschlagen", detail);
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
-             wentThroughAnyway ? "Verifiziert: war TROTZDEM erfolgreich%s" : "Verifiziert: wirklich fehlgeschlagen%s",
-             detail);
+  if (determined && wentThroughAnyway) {
+    stage6Log("Verifikation \"%s\" (App %s): TROTZ gemeldetem Fehlschlag durchgegangen%s",
+              DESFIRE_ACTIONS[action].title, activeAidLabel, detail);
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Verifiziert: war TROTZDEM erfolgreich%s", detail);
+    updateUidInfo();
+    buzzerBeep(80);
+  } else if (determined) {
+    // WIRKLICH fehlgeschlagen -- auf Nutzerwunsch nicht nur melden,
+    // sondern die Aktion jetzt richtig nachholen (dieselbe, bereits
+    // aktivierte Karte weiterverwenden). desfireRunModalAction() setzt
+    // desfireSummaryMsg/piept selbst ueber die normale desfireOpXxx()-
+    // Logik -- schlaegt sie NOCHMAL fehl, setzt sie erneut
+    // desfireOfferVerify, was loop() automatisch in eine weitere
+    // Verifikationsrunde schickt (derselbe Ablauf wie beim ersten Mal).
+    stage6Log("Verifikation \"%s\" (App %s): wirklich fehlgeschlagen -- wird jetzt automatisch nachgeholt.",
+              DESFIRE_ACTIONS[action].title, activeAidLabel);
+    desfireCardAlreadyActivated = true; // dieselbe Karte, kein erneutes inListPassiveTarget() noetig
+    desfireRunModalAction(action);
   } else {
     stage6Log("Verifikation \"%s\" (App %s): nicht eindeutig feststellbar.", DESFIRE_ACTIONS[action].title, activeAidLabel);
     snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Verifikation nicht eindeutig -- evtl. erneut versuchen.");
-  }
-  updateUidInfo();
-  buzzerBeep(determined ? (wentThroughAnyway ? 80 : 300) : 150);
-}
-
-// Fuehrt die zum aktuell gewaehlten Fenster gehoerende DESFire-Aktion aus
-// (siehe DesfireModalState/loop()) -- muss NACH den desfireOpXxx()-
-// Funktionen stehen: anders als beim .ino-Build (Arduino-IDE, automatische
-// Funktions-Prototypen) generiert PlatformIOs main.cpp-Build KEINE
-// Prototypen, Vorwaertsreferenzen auf spaeter im File definierte
-// Funktionen wuerden dort nicht kompilieren.
-void desfireRunModalAction(DesfireAction action) {
-  switch (action) {
-    case DESFIRE_ACTION_SET_MASTER_KEY:   desfireOpSetMasterKey(); break;
-    case DESFIRE_ACTION_RESET_MASTER_KEY: desfireOpResetMasterKey(); break;
-    case DESFIRE_ACTION_CREATE_APP:       desfireOpCreateApp(); break;
-    case DESFIRE_ACTION_CREATE_APP_AES:   desfireOpCreateAppAes(); break;
-    case DESFIRE_ACTION_DELETE_APP:       desfireOpDeleteApp(); break;
-    case DESFIRE_ACTION_CREDIT:           desfireOpCredit(); break;
-    case DESFIRE_ACTION_DEBIT:            desfireOpDebit(); break;
-    case DESFIRE_ACTION_GET_VALUE:        desfireOpGetValue(); break;
-    case DESFIRE_ACTION_CARD_INFO:        desfireOpCardInfo(); break;
-    default: break;
+    updateUidInfo();
+    buzzerBeep(150);
   }
 }
 
@@ -2092,12 +2106,16 @@ void loop() {
           DesfireVersion ver;
           uidMatches = desfireGetVersion(ver) && memcmp(ver.uid, desfireVerifyExpectedUid, 7) == 0;
         }
+        bool ranSomething = false;
         if (uidMatches) {
           desfireVerifyPending = false;
           desfireCardAlreadyActivated = true; // fuer desfireVerifyFailedAction() (konsumiert das Flag selbst)
-          desfireVerifyFailedAction(desfireModalAction); // setzt desfireSummaryMsg, piept selbst
-          desfireModalState = MODAL_RESULT;
-          drawDesfireModalResult();
+          // setzt desfireSummaryMsg, piept selbst -- kann bei "wirklich
+          // fehlgeschlagen" intern die Aktion nochmal WIRKLICH ausfuehren
+          // (Nutzerwunsch) und dabei erneut desfireOfferVerify setzen,
+          // siehe gemeinsame Weiche unten.
+          desfireVerifyFailedAction(desfireModalAction);
+          ranSomething = true;
         } else {
           snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
                    "Andere Karte erkannt (UID stimmt nicht) -- bitte die Original-Karte auflegen.");
@@ -2105,6 +2123,16 @@ void loop() {
           buzzerBeep(150);
           desfireWaitCardDetectedMs = 0; // weiter auf die richtige Karte warten, Fenster bleibt im Wartezustand
           drawDesfireModalWaiting();
+        }
+        if (ranSomething) {
+          if (desfireOfferVerify) {
+            desfireVerifyPending = true;
+            desfireWaitCardDetectedMs = 0;
+            drawDesfireModalWaiting();
+          } else {
+            desfireModalState = MODAL_RESULT;
+            drawDesfireModalResult();
+          }
         }
       } else {
         // desfireCardAlreadyActivated=true verhindert, dass desfireOpBegin()
