@@ -197,7 +197,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-29.22";
+const char *FIRMWARE_VERSION = "2026-07-29.23";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -321,14 +321,21 @@ const uint32_t DESFIRE_CARD_SETTLE_MS = 300;
 // Reader sieht dann nur einen Kommunikationsfehler, obwohl die Karte die
 // Aktion schon ausgefuehrt hat (siehe Abschnitt 12, Nachtrag 7 in
 // firmware/README.md). Statt den Nutzer das von Hand nachpruefen zu
-// lassen (KARTEN INFO, Werte vergleichen), bietet das Ergebnisfenster
-// nach einem verifizierbaren Fehlschlag einen eigenen Button
-// "TROTZDEM PRUEFEN" an: Karte erneut auflegen, gezielt nachschauen, ob
-// die Aktion doch durchging.
-bool desfireOfferVerify = false;   // true = Ergebnisfenster zeigt btnModalVerify
+// lassen (KARTEN INFO, Werte vergleichen), springt das Fenster nach
+// einem verifizierbaren Fehlschlag AUTOMATISCH (kein Tastendruck noetig,
+// Nutzerwunsch) in einen auffaelligen "Karte jetzt nochmal auflegen"-
+// Wartezustand und prueft dann von selbst, ob die Aktion doch durchging
+// -- unter Beruecksichtigung der UID: bevor geprueft wird, wird die UID
+// der jetzt aufgelegten Karte mit der UID aus dem Fehlschlag verglichen
+// (per desfireGetVersion(), best-effort direkt nach dem Fehlschlag
+// eingesammelt), damit nicht versehentlich eine ANDERE Karte als "hat
+// doch geklappt" fehlinterpretiert wird.
+bool desfireOfferVerify = false;   // true = naechster Kartenkontakt loest die Verifikation aus statt normal zu schliessen
 bool desfireVerifyPending = false; // true = die naechste erkannte Karte loest desfireVerifyFailedAction() statt der eigentlichen Aktion aus
 int32_t desfireValueBeforeOp = 0;  // Guthabenstand VOR Credit/Debit, fuer die Verifikation
 bool desfireValueBeforeOpKnown = false;
+uint8_t desfireVerifyExpectedUid[7]; // UID der Karte, bei der die Aktion fehlschlug (best-effort)
+bool desfireVerifyExpectedUidKnown = false;
 
 enum DesfireAction {
   DESFIRE_ACTION_SET_MASTER_KEY = 0,
@@ -372,10 +379,6 @@ Button btnModalClose   = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "SCHLIES
 // inside(btnModalClose, ...), da die Flaeche identisch ist.
 Button btnModalNext = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "NAECHSTER SCHRITT" };
 Button btnModalDone = { MODAL_X + 16, MODAL_BTN_Y, MODAL_W - 32, 50, "TESTSEQUENZ FERTIG" };
-// Eigene Zeile OBERHALB von btnModalClose (siehe drawDesfireModalResult())
-// -- erscheint nur nach einem verifizierbaren Fehlschlag zusaetzlich zu
-// SCHLIESSEN, siehe desfireOfferVerify-Kommentar oben.
-Button btnModalVerify = { MODAL_X + 16, MODAL_BTN_Y - 60, MODAL_W - 32, 50, "TROTZDEM PRUEFEN" };
 
 // TEST-SEQUENZ (Nutzerwunsch, siehe firmware/README.md): statt jeden
 // Stage-6-Testschritt einzeln von Hand in der richtigen Reihenfolge zu
@@ -918,14 +921,32 @@ void drawDesfireModalConfirm() {
 // da rein lesend) angezeigt. loop() fragt den PN532 waehrend dieses
 // Zustands periodisch ab (siehe DesfireModalState-Kommentar) und fuehrt
 // die Aktion automatisch aus, sobald eine Karte erkannt wurde.
+//
+// Im Verifikations-Fall (desfireVerifyPending) zusaetzlich AUFFAELLIG
+// (groesserer, roter Text, Nutzerwunsch) und zeigt den urspruenglichen
+// Fehlschlagstext (desfireSummaryMsg) mit an, statt ihn kommentarlos zu
+// ueberschreiben -- kein Tastendruck noetig, loop() erkennt die Karte
+// und prueft automatisch (inkl. UID-Abgleich, siehe desfireOfferVerify-
+// Kommentar oben).
 void drawDesfireModalWaiting() {
   drawDesfireModalFrame();
   canvas.setTextSize(1.5);
-  canvas.setTextColor(TFT_YELLOW);
-  printWrapped(desfireVerifyPending
-                 ? "Karte jetzt erneut auflegen -- es wird geprueft, ob die Aktion trotz Fehlschlag durchging."
-                 : "Karte jetzt auflegen -- die Aktion startet automatisch, sobald sie erkannt wird.",
-               MODAL_X + 16, MODAL_Y + 60, MODAL_W - 32, 20);
+  int y = MODAL_Y + 60;
+  if (desfireVerifyPending) {
+    canvas.setTextColor(TFT_LIGHTGREY);
+    y += printWrapped(desfireSummaryMsg, MODAL_X + 16, y, MODAL_W - 32, 20) * 20 + 16;
+    canvas.setTextSize(2);
+    canvas.setTextColor(TFT_RED);
+    y += printWrapped("KARTE JETZT NOCHMAL AUFLEGEN", MODAL_X + 16, y, MODAL_W - 32, 26) * 26 + 8;
+    canvas.setTextSize(1.5);
+    canvas.setTextColor(TFT_ORANGE);
+    printWrapped("Wird automatisch geprueft (inkl. UID-Abgleich), ob die Aktion trotzdem durchging.",
+                 MODAL_X + 16, y, MODAL_W - 32, 20);
+  } else {
+    canvas.setTextColor(TFT_YELLOW);
+    printWrapped("Karte jetzt auflegen -- die Aktion startet automatisch, sobald sie erkannt wird.",
+                 MODAL_X + 16, y, MODAL_W - 32, 20);
+  }
   drawButton(btnModalCancel, TFT_DARKGREY);
 }
 
@@ -958,7 +979,6 @@ void drawDesfireModalResult() {
   if (testSeqActive) {
     drawButton(testSeqIndex + 1 < TEST_SEQUENCE_COUNT ? btnModalNext : btnModalDone, TFT_DARKGREY);
   } else {
-    if (desfireOfferVerify) drawButton(btnModalVerify, TFT_DARKGREY);
     drawButton(btnModalClose, TFT_DARKGREY);
   }
 }
@@ -1352,9 +1372,27 @@ bool desfireOpBegin() {
 // Hauptbildschirm nach dem Schliessen des Fensters bereits den richtigen
 // Stand hat). Das eigentliche Ergebnis zeigt loop() im Fenster selbst
 // (drawDesfireModalResult()).
+//
+// Bei einem verifizierbaren Fehlschlag (desfireOfferVerify, von der
+// jeweiligen Op-Funktion VOR diesem Aufruf gesetzt) geht es automatisch
+// in die Verifikation ueber (siehe loop()) -- deshalb HIER noch KEIN
+// Piepton (Nutzerwunsch: nur ganz am Ende piepen, siehe Kopfkommentar
+// der Datei -- der wirkliche Abschluss ist erst das Verifikations-
+// ergebnis, desfireVerifyFailedAction() piept selbst). Stattdessen wird
+// hier best-effort die UID der aktuellen Karte eingesammelt
+// (desfireGetVersion(), gleiche Karte wie die, bei der die Aktion
+// gerade fehlschlug), damit die Verifikation spaeter pruefen kann, ob
+// wirklich dieselbe Karte erneut aufgelegt wurde.
 void desfireOpFinish(bool ok) {
+  if (!ok && desfireOfferVerify) {
+    DesfireVersion ver;
+    desfireVerifyExpectedUidKnown = desfireGetVersion(ver);
+    if (desfireVerifyExpectedUidKnown) memcpy(desfireVerifyExpectedUid, ver.uid, 7);
+  } else {
+    desfireVerifyExpectedUidKnown = false;
+    buzzerBeep(ok ? 80 : 300);
+  }
   updateUidInfo();
-  buzzerBeep(ok ? 80 : 300);
 }
 
 // "MASTER-PW SETZEN": authentifiziert mit dem AKTUELL gueltigen Schluessel
@@ -1719,6 +1757,7 @@ void desfireOpCardInfo() {
 // naechste, ganz andere Aktion.
 void desfireVerifyFailedAction(DesfireAction action) {
   desfireCardAlreadyActivated = false;
+  desfireOfferVerify = false; // diese Aktion ist jetzt final geklaert, kein erneutes Verify-Angebot
   bool wentThroughAnyway = false;
   bool determined = false;
   char detail[48] = "";
@@ -2041,18 +2080,51 @@ void loop() {
         }
       }
     } else if (now - desfireWaitCardDetectedMs >= DESFIRE_CARD_SETTLE_MS) {
-      // desfireCardAlreadyActivated=true verhindert, dass desfireOpBegin()
-      // (in der jeweiligen desfireOpXxx()-Funktion) die Karte ein zweites
-      // Mal aktiviert -- siehe Kommentar dort.
-      desfireCardAlreadyActivated = true;
       if (desfireVerifyPending) {
-        desfireVerifyPending = false;
-        desfireVerifyFailedAction(desfireModalAction); // setzt desfireSummaryMsg, piept selbst
+        // UID-Abgleich VOR der eigentlichen Verifikation (Nutzerwunsch)
+        // -- desfireGetVersion() direkt aufgerufen (kein desfireOpBegin(),
+        // die Karte ist durch das inListPassiveTarget() oben bereits
+        // aktiviert). Bei Nichtuebereinstimmung wird NICHT verifiziert,
+        // sondern einfach weiter auf die richtige Karte gewartet -- die
+        // evtl. falsche Karte "verbraucht" dabei nichts, der naechste
+        // Poll-Zyklus aktiviert ganz normal neu.
+        bool uidMatches = true;
+        if (desfireVerifyExpectedUidKnown) {
+          DesfireVersion ver;
+          uidMatches = desfireGetVersion(ver) && memcmp(ver.uid, desfireVerifyExpectedUid, 7) == 0;
+        }
+        if (uidMatches) {
+          desfireVerifyPending = false;
+          desfireCardAlreadyActivated = true; // fuer desfireVerifyFailedAction() (konsumiert das Flag selbst)
+          desfireVerifyFailedAction(desfireModalAction); // setzt desfireSummaryMsg, piept selbst
+          desfireModalState = MODAL_RESULT;
+          drawDesfireModalResult();
+        } else {
+          snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
+                   "Andere Karte erkannt (UID stimmt nicht) -- bitte die Original-Karte auflegen.");
+          updateUidInfo();
+          buzzerBeep(150);
+          desfireWaitCardDetectedMs = 0; // weiter auf die richtige Karte warten, Fenster bleibt im Wartezustand
+          drawDesfireModalWaiting();
+        }
       } else {
-        desfireRunModalAction(desfireModalAction); // setzt desfireSummaryMsg, piept via desfireOpFinish()
+        // desfireCardAlreadyActivated=true verhindert, dass desfireOpBegin()
+        // (in der jeweiligen desfireOpXxx()-Funktion) die Karte ein zweites
+        // Mal aktiviert -- siehe Kommentar dort.
+        desfireCardAlreadyActivated = true;
+        desfireRunModalAction(desfireModalAction); // setzt desfireSummaryMsg, piept via desfireOpFinish() (ausser bei desfireOfferVerify, siehe dort)
+        if (desfireOfferVerify) {
+          // Automatisch weiter zur Verifikation, KEIN Tastendruck noetig
+          // (Nutzerwunsch) -- Fenster bleibt im (jetzt auffaelligen)
+          // Wartezustand statt zum Ergebnis zu wechseln.
+          desfireVerifyPending = true;
+          desfireWaitCardDetectedMs = 0;
+          drawDesfireModalWaiting();
+        } else {
+          desfireModalState = MODAL_RESULT;
+          drawDesfireModalResult();
+        }
       }
-      desfireModalState = MODAL_RESULT;
-      drawDesfireModalResult();
     }
   }
 
@@ -2111,18 +2183,16 @@ void loop() {
       delay(150);
       return;
     } else if (desfireModalState == MODAL_RESULT) {
-      // Gleiche Flaeche wie btnModalClose fuer alle drei Beschriftungs-
+      // Gleiche Flaeche wie btnModalClose fuer beide Beschriftungs-
       // Varianten (SCHLIESSEN/NAECHSTER SCHRITT/TESTSEQUENZ FERTIG, siehe
       // drawDesfireModalResult()) -- inside(btnModalClose, ...) erkennt
       // den Tipp unabhaengig davon, welcher Button gerade gezeichnet ist.
-      if (desfireOfferVerify && inside(btnModalVerify, x, y)) {
-        buzzerBeep(80);
-        desfireOfferVerify = false; // Button verschwindet, sobald die Pruefung laeuft
-        desfireVerifyPending = true;
-        desfireModalState = MODAL_WAITING_CARD;
-        desfireWaitCardDetectedMs = 0;
-        drawDesfireModalWaiting();
-      } else if (inside(btnModalClose, x, y)) {
+      // Die Verifikation (siehe desfireOfferVerify-Kommentar oben) laeuft
+      // seit Version 2026-07-29.23 automatisch direkt aus dem
+      // Wartezustand heraus, MODAL_RESULT wird fuer einen verifizierbaren
+      // Fehlschlag also gar nicht mehr erreicht -- kein eigener Button
+      // hier mehr noetig.
+      if (inside(btnModalClose, x, y)) {
         buzzerBeep(80);
         if (testSeqActive) {
           testSeqIndex++;

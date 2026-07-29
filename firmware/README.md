@@ -1314,7 +1314,7 @@ wenn die rohe PN532-Zeile weiterhin gelegentlich 9 meldet.
 Beide Fixes sind bisher NICHT an echter Hardware gegengetestet (Version
 `2026-07-28.16`).
 
-### Neu: Verifikationsebene bei Fehlschlag (Version `2026-07-29.22`)
+### Neu: Verifikationsebene bei Fehlschlag (Version `2026-07-29.23`)
 
 Nach mehrfachem Testen von Punkt C.6 (Karte mitten im Vorgang wegziehen)
 bestätigte sich das erwartete, aber unangenehme Muster: teils
@@ -1330,10 +1330,15 @@ ein Fehlschlag grundsätzlich ambig sein kann (`MASTER-PW SETZEN`,
 abgelehnten Buchung (`BOUNDARY_ERROR` bei zu wenig Guthaben, siehe
 Punkt C.4 — das ist eindeutig, keine Verifikation nötig.
 
-**Ablauf:** Meldet eine dieser Aktionen einen Fehlschlag, zeigt das
-Ergebnisfenster zusätzlich zu SCHLIESSEN einen Button
-**"TROTZDEM PRÜFEN"**. Antippen → Karte erneut auflegen → statt der
-ursprünglichen Aktion läuft jetzt ein gezielter Kontroll-Check:
+**Ablauf (Version `2026-07-29.23`, überarbeitet auf Nutzerwunsch --
+"die bessere Variante: eine auffällige Anzeige, Karte nochmal an den
+Reader halten, und dass das automatisch läuft unter Berücksichtigung
+der UID"):** Meldet eine dieser Aktionen einen Fehlschlag, springt das
+Fenster OHNE Tastendruck automatisch zurück in den Wartezustand --
+zeigt dabei zusätzlich auffällig (größere, rote Schrift) **"KARTE JETZT
+NOCHMAL AUFLEGEN"** zusammen mit dem ursprünglichen Fehlschlagstext.
+Sobald eine Karte erkannt wird, läuft statt der ursprünglichen Aktion
+ein gezielter Kontroll-Check:
 - `APP ERSTELLEN`/`(AES)`: `SelectApplication` auf die Ziel-AID —
   existiert sie jetzt, ist das Anlegen doch durchgegangen.
 - `APP LOESCHEN`: `SelectApplication` auf die aktive Test-App — schlägt
@@ -1346,14 +1351,30 @@ ursprünglichen Aktion läuft jetzt ein gezielter Kontroll-Check:
   Verifikation liest den aktuellen Stand erneut und vergleicht ihn mit
   "vorher" bzw. "vorher ± 100", um zu unterscheiden.
 
+**UID-Abgleich (Nutzerwunsch):** Direkt beim Fehlschlag wird best-effort
+per `desfireGetVersion()` die UID der beteiligten Karte eingesammelt
+(`desfireVerifyExpectedUid`). Bevor die Verifikation losläuft, wird die
+UID der jetzt aufgelegten Karte damit verglichen -- stimmt sie nicht
+überein ("Andere Karte erkannt"), wird NICHT verifiziert, sondern
+einfach weiter auf die richtige Karte gewartet. Verhindert, dass eine
+andere, zufällig danebenliegende Testkarte fälschlich als "hat doch
+geklappt" interpretiert wird. War die ursprüngliche Karte beim
+Fehlschlag schon weg (UID nicht einsammelbar), läuft die Verifikation
+ohne diesen zusätzlichen Schutz, aber trotzdem.
+
+Piepen passiert weiterhin nur EIN Mal ganz am Ende (Nutzerwunsch aus
+Abschnitt 10) -- beim ursprünglichen, noch unklaren Fehlschlag bleibt es
+still, erst das Verifikationsergebnis piept.
+
 Das Ergebnis ("war TROTZDEM erfolgreich" / "wirklich fehlgeschlagen" /
 "nicht eindeutig feststellbar") erscheint im Ergebnisfenster UND landet
-zusätzlich in einer neuen, eigenen Sammel-Logdatei `/stage6_log.txt`
-(ergänzt weiterhin auch das normale Log-Fenster/Tageslog, verschwindet
-also nirgends) — auf Nutzerwunsch, damit sich diese Randfall-Funde nicht
-in den täglichen Logs verlieren. Bewusst KEINE vollautomatische
-Wiederholung der eigentlichen Aktion (das wäre bei einem ChangeKey/
-CreateApplication riskant, siehe Sicherheitshinweis Abschnitt 10) — nur
-Lesen/Prüfen, nie ein zweiter Schreibversuch.
+zusätzlich in einer eigenen Sammel-Logdatei `/stage6_log.txt` (ergänzt
+weiterhin auch das normale Log-Fenster/Tageslog, verschwindet also
+nirgends) — auf Nutzerwunsch, damit sich diese Randfall-Funde nicht in
+den täglichen Logs verlieren. Bewusst KEINE automatische Wiederholung
+der eigentlichen Aktion (das wäre bei einem ChangeKey/CreateApplication
+riskant, siehe Sicherheitshinweis Abschnitt 10) — nur Lesen/Prüfen, nie
+ein zweiter Schreibversuch. ABBRECHEN im Wartezustand bricht die
+Verifikation weiterhin jederzeit ab.
 
 Noch nicht an echter Hardware getestet.
