@@ -1400,17 +1400,19 @@ ABBRECHEN im Wartezustand bricht die Verifikation weiterhin jederzeit ab.
 
 Noch nicht an echter Hardware getestet.
 
-### Offene Frage: wird die 2K3DES-Test-App (`CUSTOM_AID`, 0x123456) noch gebraucht?
+### Entschieden: 2K3DES-Test-App bleibt (Version `2026-07-29.26`)
 
 Vom Tester aufgeworfen, nachdem wiederholt Verwechslungen beim Löschen
 zwischen den beiden Test-Apps auftraten (siehe "Ziel: aktive Test-App"-
-Fix weiter oben). Jetzt, wo sowohl 2K3DES als auch AES vollständig
-bestätigt sind (Authentifizierung + ChangeKey + Credit/Debit, siehe
-Abschnitt B), bringt das gleichzeitige Vorhalten BEIDER Apps kaum noch
-zusätzlichen Testwert, aber definitiv zusätzliches Verwechslungsrisiko
-(welche App ist gerade aktiv?). Spricht außerdem für die in Abschnitt 14
-festgehaltene Terminal-Design-Vorgabe (nur eine App pro Karte). Noch
-nicht entschieden -- Optionen: (a) 2K3DES-App und ihren Button ganz aus
-Firmware/TEST-SEQUENZ entfernen, nur noch AES testen; (b) behalten für
-gelegentliche Cross-Cipher-Regressionstests, aber aus der TEST-SEQUENZ
-rausnehmen; (c) so lassen wie jetzt.
+Fix weiter oben). Kurzzeitig (Version `2026-07-29.25`) entfernt --
+Option (a): nur noch AES, 2K3DES-App und -Button ganz raus. **Wieder
+rückgängig gemacht**, nachdem sich beim Test mit zwei Terminal-Boards
+zeigte, dass Option (c) doch gebraucht wird: auf Terminal 1 wurde die
+AES-App angelegt, auf Terminal 2 sollte testweise die "normale"
+(2K3DES-)App genutzt werden -- ging nicht mehr, weil es sie in `.25`
+schlicht nicht mehr gab. Nutzerwunsch: **beide Apps bleiben**, damit
+sich Cross-Cipher-Szenarien mit zwei Boards weiter testen lassen.
+Zurück auf den Stand vor `.25` (`CUSTOM_AID` = 2K3DES-App 0x123456,
+`CUSTOM_AID_AES` = AES-App 0x654321, `activeCustomAid`-Indirektion samt
+"Ziel: aktive Test-App"-Hinweis wieder da), nur `FIRMWARE_VERSION`
+hochgezählt.
