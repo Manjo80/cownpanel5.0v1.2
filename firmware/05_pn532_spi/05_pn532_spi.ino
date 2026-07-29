@@ -196,7 +196,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-29.17";
+const char *FIRMWARE_VERSION = "2026-07-29.18";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -231,7 +231,7 @@ struct Button {
 // 2 Spalten, da mit den neuen DESFire-Schreibfunktionen viele Buttons
 // noetig sind. NTP-SYNC/WLAN-ESP-NOW-Umschalter/BACKLIGHT +/- sind auf
 // Nutzerwunsch in ein EINSTELLUNGEN-Untermenue gewandert -- nur noch EIN
-// Button dafuer im Hauptbildschirm, dahinter die 7 DESFire-Buttons und
+// Button dafuer im Hauptbildschirm, dahinter die 9 DESFire-Buttons und
 // ganz unten LOG ANZEIGEN (oeffnet das Log-Fenster, siehe drawLogView()).
 const int BTN_COL_W = 216, BTN_H = 48, BTN_ROW_GAP = 60;
 const int BTN_LEFT_X = 16, BTN_RIGHT_X = 248;
@@ -242,11 +242,12 @@ Button btnCardInfo       = { BTN_LEFT_X,  BTN_ROW1_Y + 1 * BTN_ROW_GAP, 448,    
 Button btnSetMasterKey   = { BTN_LEFT_X,  BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "MASTER-PW SETZEN" };
 Button btnResetMasterKey = { BTN_RIGHT_X, BTN_ROW1_Y + 2 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "AUF STANDARD" };
 Button btnCreateApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN" };
-Button btnDeleteApp      = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP LOESCHEN" };
-Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
-Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 4 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
-Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
-Button btnLogOpen        = { BTN_LEFT_X,  BTN_ROW1_Y + 6 * BTN_ROW_GAP, 448,       BTN_H, "LOG ANZEIGEN" };
+Button btnCreateAppAes   = { BTN_RIGHT_X, BTN_ROW1_Y + 3 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "APP ERSTELLEN (AES)" };
+Button btnDeleteApp      = { BTN_LEFT_X,  BTN_ROW1_Y + 4 * BTN_ROW_GAP, 448,       BTN_H, "APP LOESCHEN" };
+Button btnCredit         = { BTN_LEFT_X,  BTN_ROW1_Y + 5 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN BUCHEN" };
+Button btnDebit          = { BTN_RIGHT_X, BTN_ROW1_Y + 5 * BTN_ROW_GAP, BTN_COL_W, BTN_H, "GUTHABEN NUTZEN" };
+Button btnGetValue       = { BTN_LEFT_X,  BTN_ROW1_Y + 6 * BTN_ROW_GAP, 448,       BTN_H, "GUTHABEN ABFRAGEN" };
+Button btnLogOpen        = { BTN_LEFT_X,  BTN_ROW1_Y + 7 * BTN_ROW_GAP, 448,       BTN_H, "LOG ANZEIGEN" };
 
 // EINSTELLUNGEN-Untermenue -- wiederverwendet dieselbe Fenstergeometrie
 // wie das DESFire-Aktions-Fenster (MODAL_X/Y/W/H, siehe unten), aber ohne
@@ -262,6 +263,15 @@ bool settingsOpen = false;
 // (DESFire-Konvention), entspricht menschenlesbar AID 0x123456.
 const uint8_t PICC_AID[3]   = { 0x00, 0x00, 0x00 };
 const uint8_t CUSTOM_AID[3] = { 0x56, 0x34, 0x12 };
+// Zweite, unabhaengige Test-AID NUR fuer AES (Stage 6, Punkt B.2/B.3 --
+// bisher nie an echter Hardware getestet, weil die Testkarte einen
+// 2K3DES-Werksschluessel hat). "APP ERSTELLEN" erzeugt CUSTOM_AID
+// weiterhin klassisch als 2K3DES-App (Cipher folgt dem PICC-Level-Auth);
+// "APP ERSTELLEN (AES)" erzeugt UNABHAENGIG davon CUSTOM_AID_AES IMMER
+// mit aesKeys=true -- DESFire erlaubt das pro App, unabhaengig vom
+// Cipher des PICC-Master-Keys. Beide Apps koennen gleichzeitig auf der
+// Karte existieren.
+const uint8_t CUSTOM_AID_AES[3] = { 0x21, 0x43, 0x65 };
 const uint8_t CUSTOM_KEY[16] = {
   0x52, 0xC7, 0xCE, 0x05, 0x82, 0xD4, 0xA3, 0x62,
   0x39, 0xEB, 0xEF, 0xC9, 0x60, 0x34, 0x29, 0xB5
@@ -270,6 +280,18 @@ const uint8_t VALUE_FILE_NO = 0;
 const int32_t VALUE_LOWER_LIMIT = 0;       // Karte lehnt Debit unter 0 selbst ab
 const int32_t VALUE_UPPER_LIMIT = 1000000; // willkuerliche, aber grosszuegige Obergrenze
 const int32_t CREDIT_DEBIT_AMOUNT = 100;   // fester Betrag pro Tastendruck, leicht aenderbar
+
+// "Aktive" Test-App fuer MASTER-PW SETZEN/AUF STANDARD/APP LOESCHEN/
+// GUTHABEN BUCHEN/NUTZEN/ABFRAGEN -- zeigt IMMER auf die zuletzt per
+// "APP ERSTELLEN" oder "APP ERSTELLEN (AES)" gewaehlte App. Default
+// CUSTOM_AID (2K3DES), damit sich am bisherigen Verhalten ohne
+// Tastendruck nichts aendert.
+uint8_t activeCustomAid[3] = { CUSTOM_AID[0], CUSTOM_AID[1], CUSTOM_AID[2] };
+char activeAidLabel[8] = "123456";
+void setActiveCustomAid(const uint8_t aid[3]) {
+  memcpy(activeCustomAid, aid, 3);
+  snprintf(activeAidLabel, sizeof(activeAidLabel), "%02X%02X%02X", aid[2], aid[1], aid[0]);
+}
 
 // DESFire-Aktions-Fenster: jeder Aktions-Button oeffnet ein eigenes
 // Fenster statt die Aktion sofort auszufuehren. Ablauf (Nutzerwunsch,
@@ -295,6 +317,7 @@ enum DesfireAction {
   DESFIRE_ACTION_SET_MASTER_KEY = 0,
   DESFIRE_ACTION_RESET_MASTER_KEY,
   DESFIRE_ACTION_CREATE_APP,
+  DESFIRE_ACTION_CREATE_APP_AES,
   DESFIRE_ACTION_DELETE_APP,
   DESFIRE_ACTION_CREDIT,
   DESFIRE_ACTION_DEBIT,
@@ -309,13 +332,14 @@ struct DesfireActionInfo {
   const char *description;
 };
 const DesfireActionInfo DESFIRE_ACTIONS[DESFIRE_ACTION_COUNT] = {
-  { "MASTER-PW SETZEN",  "Setzt Key 0 (PICC-Ebene + eigene App, falls vorhanden) auf den Custom-Schluessel." },
-  { "AUF STANDARD",      "Setzt Key 0 (PICC-Ebene + eigene App) zurueck auf den Werks-Default (16 Nullbytes)." },
-  { "APP ERSTELLEN",     "Legt Applikation 0x123456 mit Guthaben-Datei an (Start 0)." },
-  { "APP LOESCHEN",      "Loescht Applikation 0x123456 UNWIDERRUFLICH." },
-  { "GUTHABEN BUCHEN",   "Bucht +100 auf das Guthaben." },
-  { "GUTHABEN NUTZEN",   "Zieht -100 vom Guthaben ab (falls genug vorhanden)." },
-  { "GUTHABEN ABFRAGEN", "Liest den aktuellen Guthabenstand." },
+  { "MASTER-PW SETZEN",  "Setzt Key 0 (PICC-Ebene + aktive Test-App, falls vorhanden) auf den Custom-Schluessel." },
+  { "AUF STANDARD",      "Setzt Key 0 (PICC-Ebene + aktive Test-App) zurueck auf den Werks-Default (16 Nullbytes)." },
+  { "APP ERSTELLEN",     "Legt Applikation 0x123456 (2K3DES) mit Guthaben-Datei an (Start 0) und macht sie zur aktiven Test-App." },
+  { "APP ERSTELLEN (AES)", "Legt Applikation 0x654321 IMMER mit AES-Schluesseln an (Start 0) und macht sie zur aktiven Test-App -- Stage 6, AES-Pfad." },
+  { "APP LOESCHEN",      "Loescht die aktive Test-App UNWIDERRUFLICH." },
+  { "GUTHABEN BUCHEN",   "Bucht +100 auf das Guthaben der aktiven Test-App." },
+  { "GUTHABEN NUTZEN",   "Zieht -100 vom Guthaben der aktiven Test-App ab (falls genug vorhanden)." },
+  { "GUTHABEN ABFRAGEN", "Liest den aktuellen Guthabenstand der aktiven Test-App." },
   { "KARTEN INFO",       "Liest UID und DESFire-Kurzinfo der aufgelegten Karte (Details zusaetzlich in /desfire_log.txt)." },
 };
 
@@ -502,6 +526,7 @@ void drawStaticParts() {
   drawButton(btnSetMasterKey, TFT_DARKGREY);
   drawButton(btnResetMasterKey, TFT_DARKGREY);
   drawButton(btnCreateApp, TFT_DARKGREY);
+  drawButton(btnCreateAppAes, TFT_DARKGREY);
   drawButton(btnDeleteApp, TFT_DARKGREY);
   drawButton(btnCredit, TFT_DARKGREY);
   drawButton(btnDebit, TFT_DARKGREY);
@@ -1118,7 +1143,7 @@ void desfireDeepRead() {
 }
 
 // =======================================================================
-// DESFire-Schreibfunktionen (die 7 neuen Buttons) -- auf Nutzerwunsch,
+// DESFire-Schreibfunktionen (die 8 neuen Buttons) -- auf Nutzerwunsch,
 // siehe firmware/README.md fuer Umfang/Einschraenkungen/Risikohinweise.
 // Jede Funktion aktiviert die Karte selbst (unabhaengig vom Auto-Scan-
 // Polling oben) und piept erst am ENDE (Erfolg ODER Fehlschlag), nicht
@@ -1169,10 +1194,11 @@ void desfireOpFinish(bool ok) {
 // (Default ODER Custom, je nachdem was gerade gilt -- siehe
 // desfireAuthEitherKey()) und setzt Key 0 per ChangeKey auf CUSTOM_KEY.
 // Betrifft SOWOHL die PICC-Ebene (AID 000000, die GANZE Karte) ALS AUCH,
-// falls schon vorhanden, die eigene Applikation (CUSTOM_AID) -- beides in
-// einem Tastendruck. Existiert die Applikation noch nicht, wird nur die
-// PICC-Ebene gesichert; ein erneuter Tastendruck NACH "APP ERSTELLEN"
-// sichert dann auch die App nachtraeglich.
+// falls schon vorhanden, die AKTIVE Test-App (activeCustomAid, siehe
+// "APP ERSTELLEN"/"APP ERSTELLEN (AES)") -- beides in einem Tastendruck.
+// Existiert die Applikation noch nicht, wird nur die PICC-Ebene
+// gesichert; ein erneuter Tastendruck NACH "APP ERSTELLEN" sichert dann
+// auch die App nachtraeglich.
 void desfireOpSetMasterKey() {
   if (!desfireOpBegin()) return;
   bool anyOk = false;
@@ -1195,33 +1221,35 @@ void desfireOpSetMasterKey() {
     }
   }
 
-  if (desfireSelectApplication(CUSTOM_AID)) {
+  if (desfireSelectApplication(activeCustomAid)) {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (usedCustom) {
-        logMsg("desfireOpSetMasterKey(): App-Key ist bereits der Custom-Key.");
+        logMsg("desfireOpSetMasterKey(): App-Key (%s) ist bereits der Custom-Key.", activeAidLabel);
         anyOk = true;
       } else if (desfireChangeKeySame(0, CUSTOM_KEY, sessionKey, iv, isAes)) {
-        logMsg("desfireOpSetMasterKey(): App-Key gesetzt.");
+        logMsg("desfireOpSetMasterKey(): App-Key (%s) gesetzt.", activeAidLabel);
         anyOk = true;
       } else {
-        logMsg("desfireOpSetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
+        logMsg("desfireOpSetMasterKey(): ChangeKey auf App-Ebene (%s) fehlgeschlagen.", activeAidLabel);
       }
     } else {
-      logMsg("desfireOpSetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. noch nicht angelegt).");
+      logMsg("desfireOpSetMasterKey(): Auth auf App-Ebene (%s) fehlgeschlagen (App evtl. noch nicht angelegt).", activeAidLabel);
     }
   }
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
-           anyOk ? "Master-PW gesetzt (siehe Serial)" : "Master-PW setzen fehlgeschlagen (siehe Serial)");
+           anyOk ? "Master-PW gesetzt (App %s, siehe Serial)" : "Master-PW setzen fehlgeschlagen (App %s, siehe Serial)",
+           activeAidLabel);
   desfireOpFinish(anyOk);
 }
 
 // "AUF STANDARD": Kehrbild zu oben -- authentifiziert mit dem aktuellen
 // Schluessel; war es der Custom-Key, wird per ChangeKey auf den
 // Werks-Default (16 Nullbytes) zurueckgesetzt. War es schon der Default,
-// ist nichts zu tun. Ebenfalls PICC- UND App-Ebene in einem Tastendruck.
+// ist nichts zu tun. Ebenfalls PICC- UND aktive-App-Ebene
+// (activeCustomAid) in einem Tastendruck.
 void desfireOpResetMasterKey() {
   if (!desfireOpBegin()) return;
   bool anyOk = false;
@@ -1245,26 +1273,27 @@ void desfireOpResetMasterKey() {
     }
   }
 
-  if (desfireSelectApplication(CUSTOM_AID)) {
+  if (desfireSelectApplication(activeCustomAid)) {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       if (!usedCustom) {
-        logMsg("desfireOpResetMasterKey(): App-Key ist bereits Standard.");
+        logMsg("desfireOpResetMasterKey(): App-Key (%s) ist bereits Standard.", activeAidLabel);
         anyOk = true;
       } else if (desfireChangeKeySame(0, zeroKey, sessionKey, iv, isAes)) {
-        logMsg("desfireOpResetMasterKey(): App-Key zurueckgesetzt.");
+        logMsg("desfireOpResetMasterKey(): App-Key (%s) zurueckgesetzt.", activeAidLabel);
         anyOk = true;
       } else {
-        logMsg("desfireOpResetMasterKey(): ChangeKey auf App-Ebene fehlgeschlagen.");
+        logMsg("desfireOpResetMasterKey(): ChangeKey auf App-Ebene (%s) fehlgeschlagen.", activeAidLabel);
       }
     } else {
-      logMsg("desfireOpResetMasterKey(): Auth auf App-Ebene fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpResetMasterKey(): Auth auf App-Ebene (%s) fehlgeschlagen (App evtl. nicht vorhanden).", activeAidLabel);
     }
   }
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
-           anyOk ? "Auf Standard zurueckgesetzt (siehe Serial)" : "Zuruecksetzen fehlgeschlagen (siehe Serial)");
+           anyOk ? "Auf Standard zurueckgesetzt (App %s, siehe Serial)" : "Zuruecksetzen fehlgeschlagen (App %s, siehe Serial)",
+           activeAidLabel);
   desfireOpFinish(anyOk);
 }
 
@@ -1272,10 +1301,14 @@ void desfireOpResetMasterKey() {
 // anlegen, dann in die neue App wechseln (frisch angelegt = Werks-
 // Default-Schluessel) und eine Value-Datei (FileNo 0, Guthaben startet
 // bei 0) darin erstellen. Cipher fuer die neue App richtet sich danach,
-// mit welchem Cipher die PICC-Ebene authentifiziert wurde (2K3DES oder AES).
+// mit welchem Cipher die PICC-Ebene authentifiziert wurde (2K3DES oder AES,
+// bei unserer Testkarte bisher immer 2K3DES -- fuer AES siehe
+// desfireOpCreateAppAes() unten). Macht CUSTOM_AID zur aktiven Test-App
+// fuer alle anderen Aktionen (MASTER-PW SETZEN, GUTHABEN ..., ...).
 void desfireOpCreateApp() {
   if (!desfireOpBegin()) return;
   bool ok = false;
+  setActiveCustomAid(CUSTOM_AID);
 
   if (desfireSelectApplication(PICC_AID)) {
     uint8_t sessionKey[16], iv[16];
@@ -1300,12 +1333,57 @@ void desfireOpCreateApp() {
   }
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
-           ok ? "Applikation erstellt (Guthaben 0)" : "Applikation erstellen fehlgeschlagen");
+           ok ? "Applikation %s erstellt (Guthaben 0, jetzt aktiv)" : "Applikation %s erstellen fehlgeschlagen",
+           activeAidLabel);
   desfireOpFinish(ok);
 }
 
-// "APP LOESCHEN": muss auf PICC-Ebene authentifiziert aufgerufen werden
-// (DESFire-Vorgabe, nicht innerhalb der zu loeschenden App).
+// "APP ERSTELLEN (AES)": wie desfireOpCreateApp(), aber legt CUSTOM_AID_AES
+// UNABHAENGIG vom PICC-Level-Auth-Cipher IMMER mit aesKeys=true an (DESFire
+// erlaubt das pro App). Stage 6, Punkt B.2/B.3 -- bisher nie an echter
+// Hardware getestet, weil unsere Testkarte einen 2K3DES-Werksschluessel
+// hat und "APP ERSTELLEN" deshalb bislang immer eine 2K3DES-App erzeugte.
+// Frisch angelegt = Werks-Default-Schluessel (16 Nullbytes, AES-typisiert),
+// desfireAuthEitherKey() erkennt das automatisch (probiert Zero-Key zuerst,
+// Cipher folgt aus der KeySettings2-AES-Markierung der App). Macht
+// CUSTOM_AID_AES zur aktiven Test-App.
+void desfireOpCreateAppAes() {
+  if (!desfireOpBegin()) return;
+  bool ok = false;
+  setActiveCustomAid(CUSTOM_AID_AES);
+
+  if (desfireSelectApplication(PICC_AID)) {
+    uint8_t sessionKey[16], iv[16];
+    const char *cipherName; bool isAes, usedCustom;
+    if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
+      if (desfireCreateApplication(CUSTOM_AID_AES, true)) {
+        if (desfireSelectApplication(CUSTOM_AID_AES)) {
+          uint8_t sessionKey2[16], iv2[16];
+          const char *cipherName2; bool isAes2, usedCustom2;
+          if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey2, iv2, &cipherName2, &isAes2, &usedCustom2)) {
+            ok = desfireCreateValueFile(VALUE_FILE_NO, VALUE_LOWER_LIMIT, VALUE_UPPER_LIMIT, 0);
+          } else {
+            logMsg("desfireOpCreateAppAes(): Auth in neuer App fehlgeschlagen.");
+          }
+        }
+      } else {
+        logMsg("desfireOpCreateAppAes(): CreateApplication fehlgeschlagen (existiert sie schon?).");
+      }
+    } else {
+      logMsg("desfireOpCreateAppAes(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
+    }
+  }
+
+  snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
+           ok ? "AES-Applikation %s erstellt (Guthaben 0, jetzt aktiv)" : "AES-Applikation %s erstellen fehlgeschlagen",
+           activeAidLabel);
+  desfireOpFinish(ok);
+}
+
+// "APP LOESCHEN": loescht die AKTIVE Test-App (activeCustomAid, siehe
+// "APP ERSTELLEN"/"APP ERSTELLEN (AES)"). Muss auf PICC-Ebene
+// authentifiziert aufgerufen werden (DESFire-Vorgabe, nicht innerhalb der
+// zu loeschenden App).
 void desfireOpDeleteApp() {
   if (!desfireOpBegin()) return;
   bool ok = false;
@@ -1314,14 +1392,14 @@ void desfireOpDeleteApp() {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
-      ok = desfireDeleteApplication(CUSTOM_AID);
+      ok = desfireDeleteApplication(activeCustomAid);
     } else {
       logMsg("desfireOpDeleteApp(): Authentifizierung auf PICC-Ebene fehlgeschlagen.");
     }
   }
 
   snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg),
-           ok ? "Applikation geloescht" : "Applikation loeschen fehlgeschlagen");
+           ok ? "Applikation %s geloescht" : "Applikation %s loeschen fehlgeschlagen", activeAidLabel);
   desfireOpFinish(ok);
 }
 
@@ -1337,23 +1415,23 @@ void desfireOpCredit() {
   int32_t newValue = 0;
   bool haveNewValue = false;
 
-  if (desfireSelectApplication(CUSTOM_AID)) {
+  if (desfireSelectApplication(activeCustomAid)) {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireCredit(VALUE_FILE_NO, CREDIT_DEBIT_AMOUNT) && desfireCommitTransaction();
       if (ok) haveNewValue = desfireGetValue(VALUE_FILE_NO, newValue);
     } else {
-      logMsg("desfireOpCredit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpCredit(): Authentifizierung fehlgeschlagen (App %s evtl. nicht vorhanden).", activeAidLabel);
     }
   }
 
   if (ok && haveNewValue) {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "+%ld gebucht, neuer Stand: %ld", (long)CREDIT_DEBIT_AMOUNT, (long)newValue);
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: +%ld gebucht, neuer Stand: %ld", activeAidLabel, (long)CREDIT_DEBIT_AMOUNT, (long)newValue);
   } else if (ok) {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben gebucht (+%ld)", (long)CREDIT_DEBIT_AMOUNT);
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Guthaben gebucht (+%ld)", activeAidLabel, (long)CREDIT_DEBIT_AMOUNT);
   } else {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben buchen fehlgeschlagen");
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Guthaben buchen fehlgeschlagen", activeAidLabel);
   }
   desfireOpFinish(ok);
 }
@@ -1370,7 +1448,7 @@ void desfireOpDebit() {
   int32_t newValue = 0;
   bool haveNewValue = false;
 
-  if (desfireSelectApplication(CUSTOM_AID)) {
+  if (desfireSelectApplication(activeCustomAid)) {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
@@ -1381,18 +1459,18 @@ void desfireOpDebit() {
         debitRejected = true;
       }
     } else {
-      logMsg("desfireOpDebit(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpDebit(): Authentifizierung fehlgeschlagen (App %s evtl. nicht vorhanden).", activeAidLabel);
     }
   }
 
   if (ok && haveNewValue) {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "-%ld gebucht, neuer Stand: %ld", (long)CREDIT_DEBIT_AMOUNT, (long)newValue);
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: -%ld gebucht, neuer Stand: %ld", activeAidLabel, (long)CREDIT_DEBIT_AMOUNT, (long)newValue);
   } else if (ok) {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben genutzt (-%ld)", (long)CREDIT_DEBIT_AMOUNT);
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Guthaben genutzt (-%ld)", activeAidLabel, (long)CREDIT_DEBIT_AMOUNT);
   } else if (debitRejected) {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Zu wenig Guthaben (Debit abgelehnt)");
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Zu wenig Guthaben (Debit abgelehnt)", activeAidLabel);
   } else {
-    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben nutzen fehlgeschlagen");
+    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Guthaben nutzen fehlgeschlagen", activeAidLabel);
   }
   desfireOpFinish(ok);
 }
@@ -1404,18 +1482,18 @@ void desfireOpGetValue() {
   bool ok = false;
   int32_t value = 0;
 
-  if (desfireSelectApplication(CUSTOM_AID)) {
+  if (desfireSelectApplication(activeCustomAid)) {
     uint8_t sessionKey[16], iv[16];
     const char *cipherName; bool isAes, usedCustom;
     if (desfireAuthEitherKey(0, CUSTOM_KEY, sessionKey, iv, &cipherName, &isAes, &usedCustom)) {
       ok = desfireGetValue(VALUE_FILE_NO, value);
     } else {
-      logMsg("desfireOpGetValue(): Authentifizierung fehlgeschlagen (App evtl. nicht vorhanden).");
+      logMsg("desfireOpGetValue(): Authentifizierung fehlgeschlagen (App %s evtl. nicht vorhanden).", activeAidLabel);
     }
   }
 
-  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben: %ld", (long)value);
-  else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Guthaben abfragen fehlgeschlagen");
+  if (ok) snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Guthaben: %ld", activeAidLabel, (long)value);
+  else    snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "App %s: Guthaben abfragen fehlgeschlagen", activeAidLabel);
   desfireOpFinish(ok);
 }
 
@@ -1442,6 +1520,7 @@ void desfireRunModalAction(DesfireAction action) {
     case DESFIRE_ACTION_SET_MASTER_KEY:   desfireOpSetMasterKey(); break;
     case DESFIRE_ACTION_RESET_MASTER_KEY: desfireOpResetMasterKey(); break;
     case DESFIRE_ACTION_CREATE_APP:       desfireOpCreateApp(); break;
+    case DESFIRE_ACTION_CREATE_APP_AES:   desfireOpCreateAppAes(); break;
     case DESFIRE_ACTION_DELETE_APP:       desfireOpDeleteApp(); break;
     case DESFIRE_ACTION_CREDIT:           desfireOpCredit(); break;
     case DESFIRE_ACTION_DEBIT:            desfireOpDebit(); break;
@@ -1866,6 +1945,11 @@ void loop() {
     } else if (inside(btnCreateApp, x, y)) {
       buzzerBeep(80);
       desfireModalAction = DESFIRE_ACTION_CREATE_APP;
+      desfireModalState = MODAL_CONFIRM;
+      drawDesfireModalConfirm();
+    } else if (inside(btnCreateAppAes, x, y)) {
+      buzzerBeep(80);
+      desfireModalAction = DESFIRE_ACTION_CREATE_APP_AES;
       desfireModalState = MODAL_CONFIRM;
       drawDesfireModalConfirm();
     } else if (inside(btnDeleteApp, x, y)) {

@@ -431,21 +431,23 @@ oder drei Buttons nebeneinander ist.
   tatsächlichen LovyanGFX-Konvention passt — bitte melden, dann wird die
   Formel korrigiert.
 
-## 10. DESFire-Schreibfunktionen (Stage 5, 8 Aktions-Buttons)
+## 10. DESFire-Schreibfunktionen (Stage 5, 9 Aktions-Buttons)
 
 Auf Nutzerwunsch kann Stage 5 jetzt auch schreibend auf eine DESFire-Karte
 zugreifen: eigene Applikation mit Guthaben-Datei anlegen/löschen,
 Guthaben buchen/nutzen/abfragen, Karteninformationen anzeigen, und den
 Werks-Default-Schlüssel gegen einen eigenen Schlüssel tauschen (und
-zurück). Alle 8 Buttons rechts unten im Hochformat-Layout (siehe
+zurück). Alle 9 Buttons rechts unten im Hochformat-Layout (siehe
 Abschnitt 9), alle Parameter fest im Code (`05_pn532_spi.ino`), da das
 Panel keine Tastatur hat:
 
 | Konstante | Wert | Bedeutung |
 |---|---|---|
-| `CUSTOM_AID` | `0x123456` | AID der selbst angelegten Applikation |
-| `CUSTOM_KEY` | 16 zufällige Byte (`openssl rand -hex 16`) | Ersetzt Key 0 bei "MASTER-PW SETZEN" |
-| `VALUE_FILE_NO` | `0` | Einzige Datei in der App, ein Value File |
+| `CUSTOM_AID` | `0x123456` | AID der 2K3DES-Test-App ("APP ERSTELLEN") |
+| `CUSTOM_AID_AES` | `0x654321` | AID der AES-Test-App ("APP ERSTELLEN (AES)", Stage 6 B.2/B.3) |
+| `activeCustomAid` | zeigt auf `CUSTOM_AID` ODER `CUSTOM_AID_AES` | "Aktive" Test-App, auf die MASTER-PW SETZEN/AUF STANDARD/APP LOESCHEN/GUTHABEN ... wirken -- wird von den beiden APP-ERSTELLEN-Buttons gesetzt |
+| `CUSTOM_KEY` | 16 zufällige Byte (`openssl rand -hex 16`) | Ersetzt Key 0 bei "MASTER-PW SETZEN" (gleicher Wert für 2K3DES- und AES-Interpretation) |
+| `VALUE_FILE_NO` | `0` | Einzige Datei pro App, ein Value File |
 | `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
 | `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
 
@@ -480,22 +482,36 @@ beim bloßen Erkennen der Karte.
   Default, dann Custom) und ändert Key 0 per `ChangeKey` auf den anderen
   Wert. Wirkt **sowohl auf PICC-Ebene** (AID `000000`, betrifft die
   **gesamte Karte**) **als auch** — falls schon vorhanden — auf die
-  eigene Applikation, in **einem** Tastendruck. Existiert die App noch
-  nicht, wird nur die PICC-Ebene gesichert; ein erneuter Tastendruck nach
-  "APP ERSTELLEN" sichert dann auch die App nachträglich.
-- **APP ERSTELLEN** — `CreateApplication(CUSTOM_AID)` auf PICC-Ebene,
-  danach `CreateValueFile` (Guthaben startet bei 0) in der neuen App.
-- **APP LOESCHEN** — `DeleteApplication(CUSTOM_AID)`, muss laut
+  **aktive** Test-App (`activeCustomAid`), in **einem** Tastendruck.
+  Existiert die App noch nicht, wird nur die PICC-Ebene gesichert; ein
+  erneuter Tastendruck nach "APP ERSTELLEN"/"APP ERSTELLEN (AES)" sichert
+  dann auch die App nachträglich.
+- **APP ERSTELLEN** — `CreateApplication(CUSTOM_AID, isAes)` auf
+  PICC-Ebene (Cipher folgt dem PICC-Level-Auth, bei unserer Karte immer
+  2K3DES), danach `CreateValueFile` (Guthaben startet bei 0) in der neuen
+  App. Macht `CUSTOM_AID` zur aktiven Test-App.
+- **APP ERSTELLEN (AES)** *(neu, Version `2026-07-29.18`, Stage 6 B.2/
+  B.3)* — wie oben, aber `CreateApplication(CUSTOM_AID_AES, true)`
+  erzwingt **immer** AES-Schlüssel, unabhängig vom PICC-Level-Cipher —
+  DESFire erlaubt das pro App. Macht `CUSTOM_AID_AES` zur aktiven
+  Test-App. Einziger Weg, den bisher nie an echter Hardware getesteten
+  AES-Authentifizierungs- und AES-ChangeKey-Pfad zu prüfen, ohne den
+  PICC-Master-Key selbst anzufassen. Beide Apps (2K3DES und AES) können
+  gleichzeitig auf der Karte existieren; welche gerade das Ziel der
+  übrigen Buttons ist, sieht man am `App <AID>`-Präfix im
+  Ergebnisfenster.
+- **APP LOESCHEN** — `DeleteApplication(activeCustomAid)`, muss laut
   DESFire-Vorgabe auf PICC-Ebene authentifiziert aufgerufen werden.
 - **GUTHABEN BUCHEN / NUTZEN** — `Credit`/`Debit` + `CommitTransaction`
-  (ohne Commit werden Buchungen beim nächsten Kommando verworfen), danach
-  automatisch `GetValue` für den neuen Kontostand (Nutzerwunsch) —
-  Ergebnisfenster zeigt z. B. "+100 gebucht, neuer Stand: 300" statt nur
-  "gebucht". Bei "NUTZEN": die **Karte selbst** lehnt ab, wenn das
-  Guthaben dadurch unter `VALUE_LOWER_LIMIT` (0) fallen würde (Status
-  meist `BOUNDARY_ERROR`) — keine eigene Guthaben-Prüfung nötig/
-  implementiert.
-- **GUTHABEN ABFRAGEN** — `GetValue`, Ergebnis in der Zusammenfassungszeile.
+  auf der aktiven Test-App (ohne Commit werden Buchungen beim nächsten
+  Kommando verworfen), danach automatisch `GetValue` für den neuen
+  Kontostand (Nutzerwunsch) — Ergebnisfenster zeigt z. B. "App 123456:
+  +100 gebucht, neuer Stand: 300" statt nur "gebucht". Bei "NUTZEN": die
+  **Karte selbst** lehnt ab, wenn das Guthaben dadurch unter
+  `VALUE_LOWER_LIMIT` (0) fallen würde (Status meist `BOUNDARY_ERROR`) —
+  keine eigene Guthaben-Prüfung nötig/implementiert.
+- **GUTHABEN ABFRAGEN** — `GetValue` auf der aktiven Test-App, Ergebnis in
+  der Zusammenfassungszeile.
 
 **Sicherheitshinweis ChangeKey (bitte lesen, bevor an einer echten Karte
 getestet wird):** Das Kryptogramm enthält eine CRC (CRC-A/CRC16 bei
@@ -997,14 +1013,24 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    unten.
 
 **B) Bisher ungetestete Codepfade:**
-2. AES-128-Authentifizierung (`desfireAuthAes()`) — nie erfolgreich
-   gegen echte Hardware getestet, da die Testkarte einen 2K3DES-
-   Schlüssel in Slot 0 hat. Testweise eine App mit `aesKeys=true`
-   anlegen (der Parameter existiert in `desfireCreateApplication()`,
-   wird aber vom UI aktuell nicht genutzt) und denselben ChangeKey-/
-   Credit-/Debit-Ablauf gegen einen AES-Schlüssel durchspielen.
-3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion) — aus demselben Grund nie
-   getestet.
+2. ~~AES-128-Authentifizierung (`desfireAuthAes()`)~~ — Testweg jetzt
+   vorbereitet (Version `2026-07-29.18`), **noch nicht an echter
+   Hardware bestätigt.** Neuer Button "APP ERSTELLEN (AES)" legt eine
+   ZWEITE, unabhängige Test-App (AID 0x654321) an, die IMMER
+   `aesKeys=true` verwendet (unabhängig vom Cipher des PICC-Master-Keys,
+   der bei unserer Karte weiterhin 2K3DES ist) — DESFire erlaubt das pro
+   App. Alle anderen Buttons (MASTER-PW SETZEN/AUF STANDARD/APP
+   LOESCHEN/GUTHABEN BUCHEN/NUTZEN/ABFRAGEN) wirken jetzt auf eine
+   "aktive Test-App" (`activeCustomAid`), die von "APP ERSTELLEN" (2K3DES,
+   AID 0x123456) oder "APP ERSTELLEN (AES)" gesetzt wird — beide Apps
+   können gleichzeitig auf der Karte existieren, man wechselt per
+   Tastendruck, welche gerade das Ziel der übrigen Buttons ist. Nächster
+   Test: KARTEN INFO vorher/nachher zur Kontrolle, dann "APP ERSTELLEN
+   (AES)" → MASTER-PW SETZEN → GUTHABEN BUCHEN/NUTZEN/ABFRAGEN gegen die
+   neue AES-App durchspielen, `/desfire_log.txt` + normales Log schicken.
+3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion) — wird vom obigen Test
+   automatisch mitgetestet, sobald "MASTER-PW SETZEN" gegen die aktive
+   AES-App ausgeführt wird (`desfireChangeKeySame()`, `isAes=true`-Zweig).
 
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
 4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).
@@ -1023,10 +1049,24 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
 9. Andere Kartengrößen (4K/8K/16K statt der bisher getesteten 2K) --
    siehe Antwort weiter oben im Gespräch, sollte laut Code-Analyse ohne
    Änderung funktionieren, aber nie an echter größerer Karte bestätigt.
-10. Eine echte EV1- oder EV2-Karte, falls verfügbar -- unsere
-    Kompatibilitäts-Annahme (Abschnitt 12, Antwort zu "EV1 vs. EV2 vs.
-    EV3") ist bisher nur protokoll-logisch begründet, nicht unabhängig
-    bestätigt.
+10. ~~Eine echte EV1- oder EV2-Karte, falls verfügbar~~ -- per NXP
+    TagInfo-App bestätigt: die bisherige Testkarte ist bereits ein
+    **EV3-Chip** (IC Name "EV3", 2048 Byte, Major-Version 0x33 = 51,
+    passt zu unserem geloggten `Version=51.0`) -- also die neueste
+    Generation, kein EV1/EV2. Unsere Kompatibilitäts-Annahme (Abschnitt
+    12, Antwort zu "EV1 vs. EV2 vs. EV3") war also am tatsächlich
+    verwendeten Kartentyp die ganze Zeit im Einsatz, nicht nur
+    protokoll-logisch begründet. Ein echtes EV1/EV2-Exemplar wäre
+    trotzdem noch interessant, ist aber nicht mehr die Standardkarte für
+    diesen Test.
+    Nebenbefund aus derselben TagInfo-Prüfung: NXP bietet zusätzlich zur
+    (offline laufenden) asymmetrischen Signaturprüfung eine
+    AES-basierte "symmetrische Originalitätsprüfung" gegen NXP-
+    Backend-Server an -- **nur dieses eine NXP-Feature** braucht
+    Internet. Unsere eigene DESFire-AES-Authentifizierung
+    (`desfireAuthAes()`, Slot 0, eigener Schlüssel) läuft komplett
+    lokal über PN532 ↔ Karte und braucht zu keinem Zeitpunkt eine
+    Internetverbindung.
 11. Ein zweites PN532-Modul (andere Charge/anderer Anbieter) -- das im
     Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
     Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
