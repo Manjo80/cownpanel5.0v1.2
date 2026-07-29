@@ -995,6 +995,17 @@ Terminal-Firmware), nicht hierher:
 - Buchungshistorie (Linear-/Cyclic-Record-Dateien) und alles, was damit
   zusammenhängt (siehe Abschnitt 15).
 - Jegliche Geschäftslogik (Preise, Berechtigungen, Benutzerverwaltung).
+- **App-Auswahl: fest verdrahtete AID statt "aktive"/zuletzt gewählte
+  App.** In dieser Test-Firmware zeigt `activeCustomAid` bewusst
+  einfach auf die zuletzt per "APP ERSTELLEN"/"APP ERSTELLEN (AES)"
+  gewählte App (praktisch, um beide Cipher-Testpfade parallel zu halten
+  -- siehe Abschnitt 15, Testsequenz-Funde zur Verwechslungsgefahr genau
+  dadurch). Im echten Terminal soll das anders sein: eine einzige, fest
+  im Code hinterlegte AID für Auf-/Abbuchen, unabhängig davon, wie viele
+  weitere Apps zufällig auf der Karte liegen -- und im Idealfall sollte
+  auf einer für dieses Terminal ausgegebenen Karte ohnehin nur GENAU
+  EINE Applikation existieren (Nutzervorgabe). Vermeidet die
+  Verwechslungsgefahr strukturell, statt sie nur anzuzeigen wie hier.
 
 ## 15. Stage 6 — Robustheit, Randfälle und verbleibende Board-/Modul-Eigenheiten
 
@@ -1025,15 +1036,23 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    eine echte Karte authentifiziert. Damit ist der komplette
    AES-128-Auth-Handshake (`desfireAuthWithKey()`-Fallback-Pfad) an
    echter Hardware verifiziert.
-3. AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
-   `isAes=true`) — **noch NICHT bestätigt.** Der `APPLICATION_NOT_FOUND`-
-   Fund im selben Testlauf (siehe vorherige Fassung dieses Abschnitts) war
-   laut Rückmeldung des Testers **kein Firmware-Bug**, sondern
-   durcheinandergeratene manuelle Testreihenfolge (u. a. wurde
-   ausprobiert, was beim erneuten "APP ERSTELLEN" auf eine bereits
-   bestehende App passiert -- korrekt als `DUPLICATE_ERROR` erkannt).
-   Nächster Test jetzt über die neue TEST-SEQUENZ (siehe unten) statt von
-   Hand, damit die Reihenfolge garantiert stimmt.
+3. ~~AES-ChangeKey-Zweig (CRC32 mit KeyVersion, `desfireChangeKeySame()`,
+   `isAes=true`)~~ — **BESTÄTIGT an echter Hardware** (2026-07-29, 09:29
+   Uhr, erster vollständiger Lauf der neuen TEST-SEQUENZ, siehe unten):
+   ```
+   desfireOpSetMasterKey(): App-Key (654321) gesetzt.
+   ...
+   desfireOpResetMasterKey(): App-Key (654321) zurueckgesetzt.
+   ```
+   Sowohl ChangeKey AUF den Custom-AES-Schlüssel als auch wieder ZURÜCK
+   auf den Werks-Default liefen erfolgreich gegen die AES-Testapp durch.
+   Damit sind alle in Abschnitt B geplanten AES-Codepfade
+   (Authentifizierung + ChangeKey) an echter Hardware verifiziert.
+   Der `APPLICATION_NOT_FOUND`-Fund aus dem vorherigen Testlauf war laut
+   Rückmeldung des Testers tatsächlich durcheinandergeratene manuelle
+   Testreihenfolge, nicht dieser Codepfad — bestätigt dadurch, dass der
+   TEST-SEQUENZ-Lauf (garantiert richtige Reihenfolge) hier sauber
+   durchlief.
 
 **Neu: automatisierte TEST-SEQUENZ (Version `2026-07-29.19`).** Auf
 Nutzerwunsch, nachdem manuelles Testen in falscher Reihenfolge zu einem
@@ -1050,9 +1069,9 @@ Terminal-Nutzung):
 1. KARTEN INFO (Ausgangszustand) → 2. AUF STANDARD → 3. APP ERSTELLEN
 (2K3DES) → 4. MASTER-PW SETZEN → 5. GUTHABEN BUCHEN → 6. GUTHABEN NUTZEN
 → 7. GUTHABEN ABFRAGEN (Kontrolle) → 8. AUF STANDARD → 9. APP ERSTELLEN
-(AES) → 10. MASTER-PW SETZEN (**AES-ChangeKey, bisher unbestätigt**) →
-11. GUTHABEN BUCHEN → 12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN
-(Kontrolle) → 14. AUF STANDARD → 15. KARTEN INFO (Endzustand).
+(AES) → 10. MASTER-PW SETZEN (AES-ChangeKey) → 11. GUTHABEN BUCHEN →
+12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN (Kontrolle) → 14. AUF
+STANDARD → 15. KARTEN INFO (Endzustand).
 
 Jeder Schritt zeigt "Schritt X/15:" im Fenstertitel, den Grund, warum er
 in der Sequenz steckt, und danach wie gewohnt AUSFÜHREN → Karte auflegen
@@ -1064,18 +1083,70 @@ hervorgehoben). Löschende Schritte (APP LOESCHEN) sind bewusst NICHT
 Teil der Sequenz -- Löschen bleibt ein separater, gezielter
 Tastendruck.
 
+**Erster kompletter Lauf (2026-07-29, 09:28 Uhr): alle 15 Schritte
+erfolgreich, EIN Fund danach beim manuellen Aufräumen.** Beide Apps
+angelegt, beide Master-Keys gesetzt UND zurückgesetzt (2K3DES + AES),
+Guthaben-Zyklus auf beiden Apps sauber — bestätigt außerdem, dass die
+zwischenzeitlich befürchtete `APPLICATION_NOT_FOUND`-Anomalie (siehe
+Punkt 3 oben) tatsächlich nur an der vorher durcheinandergeratenen
+manuellen Reihenfolge lag, nicht an einem Codepfad.
+
+Direkt NACH der Sequenz (APP LOESCHEN ist bewusst nicht automatisiert,
+siehe oben) meldete "APP LOESCHEN" für die AES-App einmalig
+`APPLICATION_NOT_FOUND`, obwohl dieselbe App Sekunden vorher per KARTEN
+INFO noch zweifelsfrei vorhanden war (`activeCustomAid` zeigte zu diesem
+Zeitpunkt nachweislich noch auf `654321` -- seit Schritt 9 der Sequenz
+nichts geändert). **Zwei getrennte Funde beim Aufklären, nicht einer:**
+
+1. **Der eigentliche Fehlschlag** passt zum selben PN532-Antwortmüll-
+   Verdacht wie die `GetFileIDs`-Anomalie (Punkt A.1) und dem in
+   Abschnitt 12/Nachtrag 7 dokumentierten Fall ("App trotz gemeldetem
+   Fehlschlag angelegt") — vermutlich verfälscht der PN532-Chip
+   gelegentlich auch den `DeleteApplication`-Statuscode.
+   **Gegenmaßnahme (Version `2026-07-29.20`):** `desfireOpDeleteApp()`
+   versucht bei einem Fehlschlag automatisch EINMAL erneut, bevor es
+   aufgibt.
+2. **Echter UX-Bug beim Nachfassen, gefunden durch Nachfrage beim
+   Tester:** Um zu prüfen, ob die App noch existiert, wurde "APP
+   ERSTELLEN" (die 2K3DES-Variante, nicht "APP ERSTELLEN (AES)")
+   angetippt -- Log bestätigt `desfireOpCreateApp(): ... DUPLICATE_ERROR`
+   statt `desfireOpCreateAppAes()`. Problem: `desfireOpCreateApp()` ruft
+   `setActiveCustomAid(CUSTOM_AID)` **unbedingt** auf, auch bei
+   Fehlschlag/Duplikat -- dadurch zeigte "APP LOESCHEN" danach unbemerkt
+   auf die 2K3DES- statt die AES-App, ohne dass das irgendwo sichtbar
+   war. Der Tester vermutete zunächst einen Speicher-/Tracking-Fehler
+   ("App wird gelöscht, aber die andere ist nicht mehr im Speicher") --
+   tatsächlich war es genau diese stille Umschaltung.
+   **Gegenmaßnahme (Version `2026-07-29.21`):** Bestätigungsfenster
+   zeigt jetzt für alle auf `activeCustomAid` wirkenden Aktionen (MASTER-
+   PW SETZEN/AUF STANDARD/APP LOESCHEN/GUTHABEN BUCHEN/NUTZEN/ABFRAGEN)
+   zusätzlich "Ziel: aktive Test-App `<AID>`", bevor man AUSFÜHREN
+   antippt -- eine vollständige App-Auswahl (Nutzervorschlag: Apps
+   abfragen und manuell wählen) wäre die "richtige" Lösung, aber laut
+   Tester selbst nicht das eigentliche Thema dieses Repositories
+   (Board-/Modul-Quirks, nicht Terminal-UX) — die sichtbare Zielzeile
+   behebt die konkrete Verwechslungsgefahr mit deutlich weniger Aufwand.
+   Noch nicht an echter Hardware bestätigt.
+
 **C) Randfälle/Grenztests (kein neuer Code nötig, nur gezieltes Testen):**
-4. `Debit` unter die Untergrenze (`BOUNDARY_ERROR` erwartet).
+4. ~~`Debit` unter die Untergrenze~~ — **BESTÄTIGT**, funktioniert wie
+   vorgesehen (Karte lehnt ab, `BOUNDARY_ERROR`, kein eigener
+   Vorab-Check nötig).
 5. `GetValue` direkt nach `Credit`, aber vor `CommitTransaction` --
    zeigt das den alten oder den neuen Wert?
-6. Karte mitten in einem mehrstufigen Vorgang (Auth, ChangeKey,
-   CreateApplication, Credit vor Commit) wegziehen -- sauberer
-   Fehlschlag ohne Hänger/Absturz?
+6. ~~Karte mitten in einem mehrstufigen Vorgang wegziehen~~ — getestet
+   (oft): teils Fehlermeldung, aber Aktion ging trotzdem durch, teils
+   Fehlermeldung UND Aktion ging wirklich nicht durch — beides erwartetes
+   Verhalten (RF-Unterbrechung kann vor ODER nach der kartenseitigen
+   Verarbeitung passieren, siehe Abschnitt 12 Nachtrag 7). Auf
+   Nutzerwunsch jetzt eine **Verifikationsebene** eingebaut statt das von
+   Hand nachschauen zu müssen, siehe "Neu: Verifikationsebene" unten.
 7. Viele Zyklen hintereinander (Master-Key setzen/zurücksetzen, App
    erstellen/löschen) -- Stabilität über Zeit, kein Speicherleck, kein
    ESP32-Reset.
 8. ESP-NOW-Traffic von einem zweiten Board UND DESFire-Vorgänge
-   gleichzeitig -- Timing-Interferenzen?
+   gleichzeitig -- Timing-Interferenzen? **Jetzt testbar:** zweites Panel
+   vorhanden.
 
 **D) Hardware-Varianz (abhängig von Beschaffung):**
 9. Andere Kartengrößen (4K/8K/16K statt der bisher getesteten 2K) --
@@ -1102,7 +1173,8 @@ Tastendruck.
 11. Ein zweites PN532-Modul (andere Charge/anderer Anbieter) -- das im
     Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
     Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
-    Hardware ausschließen oder bestätigen.
+    Hardware ausschließen oder bestätigen. **Jetzt testbar:** zweites
+    PN532-Modul vorhanden (zusätzlich zum zweiten Panel für Punkt C.8).
 
 ### Ergebnisse der ersten Testrunde
 
@@ -1241,3 +1313,68 @@ wenn die rohe PN532-Zeile weiterhin gelegentlich 9 meldet.
 
 Beide Fixes sind bisher NICHT an echter Hardware gegengetestet (Version
 `2026-07-28.16`).
+
+### Neu: Verifikationsebene bei Fehlschlag (Version `2026-07-29.23`)
+
+Nach mehrfachem Testen von Punkt C.6 (Karte mitten im Vorgang wegziehen)
+bestätigte sich das erwartete, aber unangenehme Muster: teils
+Fehlermeldung, obwohl die Aktion doch durchging, teils Fehlermeldung UND
+die Aktion ging wirklich nicht durch — von außen nicht unterscheidbar,
+ohne von Hand nachzuschauen (KARTEN INFO, Werte vergleichen). Auf
+Nutzerwunsch ("das beste wäre eine Bestätigungsebene in den Code
+einzubauen: bei Fehlschlag wird beim erneuten Auflegen kontrolliert, ob
+geschrieben oder nicht") jetzt eingebaut, für alle Aktionen, bei denen
+ein Fehlschlag grundsätzlich ambig sein kann (`MASTER-PW SETZEN`,
+`AUF STANDARD`, `APP ERSTELLEN`/`(AES)`, `APP LOESCHEN`,
+`GUTHABEN BUCHEN`/`NUTZEN`) — NICHT bei einer von der Karte explizit
+abgelehnten Buchung (`BOUNDARY_ERROR` bei zu wenig Guthaben, siehe
+Punkt C.4 — das ist eindeutig, keine Verifikation nötig.
+
+**Ablauf (Version `2026-07-29.23`, überarbeitet auf Nutzerwunsch --
+"die bessere Variante: eine auffällige Anzeige, Karte nochmal an den
+Reader halten, und dass das automatisch läuft unter Berücksichtigung
+der UID"):** Meldet eine dieser Aktionen einen Fehlschlag, springt das
+Fenster OHNE Tastendruck automatisch zurück in den Wartezustand --
+zeigt dabei zusätzlich auffällig (größere, rote Schrift) **"KARTE JETZT
+NOCHMAL AUFLEGEN"** zusammen mit dem ursprünglichen Fehlschlagstext.
+Sobald eine Karte erkannt wird, läuft statt der ursprünglichen Aktion
+ein gezielter Kontroll-Check:
+- `APP ERSTELLEN`/`(AES)`: `SelectApplication` auf die Ziel-AID —
+  existiert sie jetzt, ist das Anlegen doch durchgegangen.
+- `APP LOESCHEN`: `SelectApplication` auf die aktive Test-App — schlägt
+  das jetzt fehl (`APPLICATION_NOT_FOUND`), ist das Löschen doch
+  durchgegangen.
+- `MASTER-PW SETZEN`/`AUF STANDARD`: erneute Authentifizierung, geprüft
+  wird, ob dabei der NEUE (Custom- bzw. Werks-) Schlüssel greift.
+- `GUTHABEN BUCHEN`/`NUTZEN`: der Guthabenstand wird jetzt bereits VOR
+  jedem Buchungsversuch gemerkt (`desfireValueBeforeOp`); die
+  Verifikation liest den aktuellen Stand erneut und vergleicht ihn mit
+  "vorher" bzw. "vorher ± 100", um zu unterscheiden.
+
+**UID-Abgleich (Nutzerwunsch):** Direkt beim Fehlschlag wird best-effort
+per `desfireGetVersion()` die UID der beteiligten Karte eingesammelt
+(`desfireVerifyExpectedUid`). Bevor die Verifikation losläuft, wird die
+UID der jetzt aufgelegten Karte damit verglichen -- stimmt sie nicht
+überein ("Andere Karte erkannt"), wird NICHT verifiziert, sondern
+einfach weiter auf die richtige Karte gewartet. Verhindert, dass eine
+andere, zufällig danebenliegende Testkarte fälschlich als "hat doch
+geklappt" interpretiert wird. War die ursprüngliche Karte beim
+Fehlschlag schon weg (UID nicht einsammelbar), läuft die Verifikation
+ohne diesen zusätzlichen Schutz, aber trotzdem.
+
+Piepen passiert weiterhin nur EIN Mal ganz am Ende (Nutzerwunsch aus
+Abschnitt 10) -- beim ursprünglichen, noch unklaren Fehlschlag bleibt es
+still, erst das Verifikationsergebnis piept.
+
+Das Ergebnis ("war TROTZDEM erfolgreich" / "wirklich fehlgeschlagen" /
+"nicht eindeutig feststellbar") erscheint im Ergebnisfenster UND landet
+zusätzlich in einer eigenen Sammel-Logdatei `/stage6_log.txt` (ergänzt
+weiterhin auch das normale Log-Fenster/Tageslog, verschwindet also
+nirgends) — auf Nutzerwunsch, damit sich diese Randfall-Funde nicht in
+den täglichen Logs verlieren. Bewusst KEINE automatische Wiederholung
+der eigentlichen Aktion (das wäre bei einem ChangeKey/CreateApplication
+riskant, siehe Sicherheitshinweis Abschnitt 10) — nur Lesen/Prüfen, nie
+ein zweiter Schreibversuch. ABBRECHEN im Wartezustand bricht die
+Verifikation weiterhin jederzeit ab.
+
+Noch nicht an echter Hardware getestet.
