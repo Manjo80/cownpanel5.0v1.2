@@ -1091,3 +1091,26 @@ Punkte A-C brauchen keine neue Hardware und keinen neuen Code (außer
 punktuellen Diagnose-Ergänzungen wie in Nachtrag 7) -- das ist der
 sinnvolle nächste Schritt. D hängt davon ab, welche Zusatz-Hardware
 verfügbar ist.
+
+### UX-Umbau (aktives Warten auf Karte, Abschnitt 10): zwei Bugs beim ersten Test gefunden und behoben
+
+1. **KARTEN-INFO-Button unsichtbar.** `btnCardInfo` wurde zwar korrekt
+   deklariert und sein Touch-Handler funktionierte, aber `drawStaticParts()`
+   pflegt eine EXPLIZITE Liste aller zu zeichnenden Buttons -- der neue
+   Button fehlte darin, wurde also nie gezeichnet. Ergänzt.
+2. **"Karte erkannt, dann trotzdem 'Keine Karte aufgelegt'".** Der neue
+   Wartezustand ruft `nfc.inListPassiveTarget()` EINMAL auf, um die Karte
+   zu erkennen -- die anschließend aufgerufene `desfireOpXxx()`-Funktion
+   rief über `desfireOpBegin()` aber ein ZWEITES Mal
+   `inListPassiveTarget()` auf, ohne dass dazwischen ein natives DESFire-
+   Kommando gesendet wurde. Exakt derselbe Doppel-Aktivierungs-Fehler, der
+   in diesem Projekt schon einmal für das frühere `inListPassiveTarget()`+
+   `readPassiveTargetID()`-Problem sorgte (siehe Kopfkommentar der Datei)
+   -- schlägt an echter Hardware regelmäßig fehl. **Fix:** neue Variable
+   `desfireCardAlreadyActivated`, wird vom Wartezustand direkt vor dem
+   Ausführen der Aktion gesetzt; `desfireOpBegin()` überspringt in diesem
+   Fall den zweiten `inListPassiveTarget()`-Aufruf und nutzt die bereits
+   aktivierte Karte weiter.
+
+Beide Fixes sind bisher NICHT an echter Hardware gegengetestet (Version
+`2026-07-28.16`).

@@ -197,7 +197,7 @@ LGFX_Sprite canvas;
 // steht auch auf dem Display (siehe drawStaticParts()) -- so ist nach
 // einem "git pull" + Neu-Flashen sofort sichtbar, ob wirklich die
 // neueste Version laeuft.
-const char *FIRMWARE_VERSION = "2026-07-28.15";
+const char *FIRMWARE_VERSION = "2026-07-28.16";
 
 // Panel ist als 800x480-Querformat fest verdrahtet (siehe rgb_panel.h --
 // feste RGB-Timings, h_res/v_res = LCD_WIDTH/LCD_HEIGHT). Die 90-Grad-
@@ -499,6 +499,7 @@ void drawStaticParts() {
   canvas.printf("  v%s", FIRMWARE_VERSION);
 
   drawButton(btnSettingsOpen, TFT_DARKGREY);
+  drawButton(btnCardInfo, TFT_DARKGREY);
   drawButton(btnSetMasterKey, TFT_DARKGREY);
   drawButton(btnResetMasterKey, TFT_DARKGREY);
   drawButton(btnCreateApp, TFT_DARKGREY);
@@ -1106,7 +1107,23 @@ void desfireDeepRead() {
 
 // Aktiviert eine aufliegende Karte fuer EIN einzelnes Schreibkommando.
 // Meldet ueber desfireSummaryMsg + Rueckgabewert, falls keine Karte da ist.
+//
+// WICHTIG: Falls der aktive Wartezustand (MODAL_WAITING_CARD, siehe
+// loop()) die Karte bereits erfolgreich aktiviert hat (desfireOpAlreadyActivated),
+// wird HIER absichtlich KEIN zweiter inListPassiveTarget()-Aufruf gemacht
+// -- ein zweiter Aufruf direkt nach einer bereits erfolgreichen
+// Aktivierung (ohne dazwischenliegendes natives Kommando) schlug an
+// echter Hardware fehl ("Keine Karte aufgelegt", obwohl die Karte gerade
+// erst erkannt wurde) -- derselbe Doppel-Aktivierungs-Fehler wie beim
+// frueheren inListPassiveTarget()+readPassiveTargetID()-Problem (siehe
+// Kopfkommentar der Datei), nur diesmal durch zwei inListPassiveTarget()-
+// Aufrufe kurz hintereinander ausgeloest.
+bool desfireCardAlreadyActivated = false;
 bool desfireOpBegin() {
+  if (desfireCardAlreadyActivated) {
+    desfireCardAlreadyActivated = false; // nur fuer genau diesen einen Aufruf gueltig
+    return true;
+  }
   if (!nfc.inListPassiveTarget()) {
     snprintf(desfireSummaryMsg, sizeof(desfireSummaryMsg), "Keine Karte aufgelegt.");
     updateUidInfo();
@@ -1665,6 +1682,10 @@ void loop() {
         }
       }
     } else if (now - desfireWaitCardDetectedMs >= DESFIRE_CARD_SETTLE_MS) {
+      // desfireCardAlreadyActivated=true verhindert, dass desfireOpBegin()
+      // (in der jeweiligen desfireOpXxx()-Funktion) die Karte ein zweites
+      // Mal aktiviert -- siehe Kommentar dort.
+      desfireCardAlreadyActivated = true;
       desfireRunModalAction(desfireModalAction); // setzt desfireSummaryMsg, piept via desfireOpFinish()
       desfireModalState = MODAL_RESULT;
       drawDesfireModalResult();
