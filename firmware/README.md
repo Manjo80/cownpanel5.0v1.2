@@ -1137,14 +1137,22 @@ nichts geändert). **Zwei getrennte Funde beim Aufklären, nicht einer:**
    Fehlermeldung UND Aktion ging wirklich nicht durch — beides erwartetes
    Verhalten (RF-Unterbrechung kann vor ODER nach der kartenseitigen
    Verarbeitung passieren, siehe Abschnitt 12 Nachtrag 7). Auf
-   Nutzerwunsch jetzt eine **Verifikationsebene** eingebaut statt das von
-   Hand nachschauen zu müssen, siehe "Neu: Verifikationsebene" unten.
-7. Viele Zyklen hintereinander (Master-Key setzen/zurücksetzen, App
-   erstellen/löschen) -- Stabilität über Zeit, kein Speicherleck, kein
-   ESP32-Reset.
-8. ESP-NOW-Traffic von einem zweiten Board UND DESFire-Vorgänge
-   gleichzeitig -- Timing-Interferenzen? **Jetzt testbar:** zweites Panel
-   vorhanden.
+   Nutzerwunsch eine **Verifikationsebene** eingebaut statt das von Hand
+   nachschauen zu müssen (siehe "Neu: Verifikationsebene" unten) --
+   **die automatische Nachhol-Logik (Version `2026-07-29.24`) ist an
+   echter Hardware bestätigt.**
+7. ~~Viele Zyklen hintereinander~~ (Master-Key setzen/zurücksetzen, App
+   erstellen/löschen) -- **getestet**, Ergebnis siehe Log vom
+   2026-07-29, 13:31 Uhr: einmalig `APPLICATION_NOT_FOUND` bei
+   `GUTHABEN BUCHEN` (Ursache nicht abschließend geklärt, entweder
+   PN532-Statuscode-Anomalie wie bei Punkt A.1 oder eine durcheinander-
+   geratene manuelle Tastenreihenfolge) -- kein ESP32-Absturz, kein
+   Speicherleck über den Testlauf. Durch die Verifikations-/Nachhol-
+   Logik (Punkt 6) inzwischen ohnehin automatisch abgefangen.
+8. ~~ESP-NOW-Traffic von einem zweiten Board UND DESFire-Vorgänge
+   gleichzeitig~~ — **BESTÄTIGT** (2026-07-29, zwei Terminals parallel
+   im Einsatz): WLAN/ESP-NOW und DESFire zusammen funktionieren, keine
+   Timing-Interferenzen beobachtet.
 
 **D) Hardware-Varianz (abhängig von Beschaffung):**
 9. Andere Kartengrößen (4K/8K/16K statt der bisher getesteten 2K) --
@@ -1168,11 +1176,28 @@ nichts geändert). **Zwei getrennte Funde beim Aufklären, nicht einer:**
     (`desfireAuthAes()`, Slot 0, eigener Schlüssel) läuft komplett
     lokal über PN532 ↔ Karte und braucht zu keinem Zeitpunkt eine
     Internetverbindung.
-11. Ein zweites PN532-Modul (andere Charge/anderer Anbieter) -- das im
+11. ~~Ein zweites PN532-Modul~~ (andere Charge/anderer Anbieter) -- das im
     Tutorial (Abschnitt 7) beschriebene Problem mit zu schwachen
     Nachbau-Modulen (RF-Feld bricht bei Auth ein) an unserer eigenen
-    Hardware ausschließen oder bestätigen. **Jetzt testbar:** zweites
-    PN532-Modul vorhanden (zusätzlich zum zweiten Panel für Punkt C.8).
+    Hardware ausschließen oder bestätigen. **Getestet mit zwei
+    Terminal-Boards (2026-07-29):** `device2_desfire_log.txt` zeigt
+    einen sauberen Read (AES-Auth erfolgreich, Guthaben-Datei korrekt
+    via `GetFileSettings` verifiziert) -- kein Hardware-Unterschied
+    zwischen den Modulen gefunden. Der zunächst gemeldete "geht auf dem
+    einen Terminal, aber nicht auf dem anderen"-Eindruck stellte sich
+    als reine Verwechslung heraus (unterschiedliche Firmware-Stände
+    während der 2K3DES-Entfernung/-Rückführung), kein Hardware-Fund.
+
+**Fazit (2026-07-29):** Alle Kernpfade (2K3DES- und AES-Authentifizierung
++ ChangeKey + Credit/Debit/GetValue, Verifikations-/Nachhol-Logik bei
+Fehlschlag, WLAN/ESP-NOW gleichzeitig mit DESFire, zwei Terminal-Boards
+parallel) sind an echter Hardware bestätigt. Offen bleiben nur zwei
+unkritische, nicht-blockierende Punkte: **C.5** (`GetValue` zwischen
+`Credit` und `CommitTransaction` -- kurzer Verhaltenstest, keine
+Fehlerquelle bekannt) und **D.9** (Kartengrößen über 2K -- mangels
+größerer Testkarte aktuell nicht prüfbar, laut Code-Analyse aber ohne
+Änderung kompatibel). Keiner der beiden blockiert den Start der echten
+Terminal-Firmware.
 
 ### Ergebnisse der ersten Testrunde
 
