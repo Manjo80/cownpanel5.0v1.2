@@ -431,24 +431,23 @@ oder drei Buttons nebeneinander ist.
   tatsächlichen LovyanGFX-Konvention passt — bitte melden, dann wird die
   Formel korrigiert.
 
-## 10. DESFire-Schreibfunktionen (Stage 5, 8 Aktions-Buttons)
+## 10. DESFire-Schreibfunktionen (Stage 5, 9 Aktions-Buttons)
 
 Auf Nutzerwunsch kann Stage 5 jetzt auch schreibend auf eine DESFire-Karte
 zugreifen: eigene Applikation mit Guthaben-Datei anlegen/löschen,
 Guthaben buchen/nutzen/abfragen, Karteninformationen anzeigen, und den
 Werks-Default-Schlüssel gegen einen eigenen Schlüssel tauschen (und
-zurück). Alle 8 Buttons rechts unten im Hochformat-Layout (siehe
+zurück). Alle 9 Buttons rechts unten im Hochformat-Layout (siehe
 Abschnitt 9), alle Parameter fest im Code (`05_pn532_spi.ino`), da das
-Panel keine Tastatur hat. Es gibt seit Version `2026-07-29.25` nur noch
-EINE Test-App (vorher gab es zusätzlich eine klassische 2K3DES-Variante
--- entfernt, siehe Abschnitt 15, "Entschieden: 2K3DES-Test-App
-entfernt"):
+Panel keine Tastatur hat:
 
 | Konstante | Wert | Bedeutung |
 |---|---|---|
-| `CUSTOM_AID` | `0x654321` | AID der Test-App ("APP ERSTELLEN"), IMMER mit AES-Schlüsseln angelegt |
-| `CUSTOM_KEY` | 16 zufällige Byte (`openssl rand -hex 16`) | Ersetzt Key 0 bei "MASTER-PW SETZEN" |
-| `VALUE_FILE_NO` | `0` | Einzige Datei der App, ein Value File |
+| `CUSTOM_AID` | `0x123456` | AID der 2K3DES-Test-App ("APP ERSTELLEN") |
+| `CUSTOM_AID_AES` | `0x654321` | AID der AES-Test-App ("APP ERSTELLEN (AES)", Stage 6 B.2/B.3) |
+| `activeCustomAid` | zeigt auf `CUSTOM_AID` ODER `CUSTOM_AID_AES` | "Aktive" Test-App, auf die MASTER-PW SETZEN/AUF STANDARD/APP LOESCHEN/GUTHABEN ... wirken -- wird von den beiden APP-ERSTELLEN-Buttons gesetzt |
+| `CUSTOM_KEY` | 16 zufällige Byte (`openssl rand -hex 16`) | Ersetzt Key 0 bei "MASTER-PW SETZEN" (gleicher Wert für 2K3DES- und AES-Interpretation) |
+| `VALUE_FILE_NO` | `0` | Einzige Datei pro App, ein Value File |
 | `VALUE_LOWER_LIMIT` / `_UPPER_LIMIT` | `0` / `1000000` | Grenzen des Guthabens |
 | `CREDIT_DEBIT_AMOUNT` | `100` | Fester Betrag pro Tastendruck |
 
@@ -483,30 +482,36 @@ beim bloßen Erkennen der Karte.
   Default, dann Custom) und ändert Key 0 per `ChangeKey` auf den anderen
   Wert. Wirkt **sowohl auf PICC-Ebene** (AID `000000`, betrifft die
   **gesamte Karte**) **als auch** — falls schon vorhanden — auf die
-  Test-App (`CUSTOM_AID`), in **einem** Tastendruck. Existiert die App
-  noch nicht, wird nur die PICC-Ebene gesichert; ein erneuter
-  Tastendruck nach "APP ERSTELLEN" sichert dann auch die App
-  nachträglich.
-- **APP ERSTELLEN** — `CreateApplication(CUSTOM_AID, true)` auf
-  PICC-Ebene erzwingt **immer** AES-Schlüssel, unabhängig vom
-  PICC-Level-Cipher — DESFire erlaubt das pro App. Danach
-  `CreateValueFile` (Guthaben startet bei 0) in der neuen App. Bis
-  Version `2026-07-29.24` gab es zusätzlich eine zweite, klassische
-  2K3DES-Test-App ("APP ERSTELLEN (AES)" hieß der AES-Button damals, zur
-  Unterscheidung) -- seit `2026-07-29.25` entfernt (siehe Abschnitt 15),
-  jetzt gibt es nur noch diese eine App.
-- **APP LOESCHEN** — `DeleteApplication(CUSTOM_AID)`, muss laut
+  **aktive** Test-App (`activeCustomAid`), in **einem** Tastendruck.
+  Existiert die App noch nicht, wird nur die PICC-Ebene gesichert; ein
+  erneuter Tastendruck nach "APP ERSTELLEN"/"APP ERSTELLEN (AES)" sichert
+  dann auch die App nachträglich.
+- **APP ERSTELLEN** — `CreateApplication(CUSTOM_AID, isAes)` auf
+  PICC-Ebene (Cipher folgt dem PICC-Level-Auth, bei unserer Karte immer
+  2K3DES), danach `CreateValueFile` (Guthaben startet bei 0) in der neuen
+  App. Macht `CUSTOM_AID` zur aktiven Test-App.
+- **APP ERSTELLEN (AES)** *(neu, Version `2026-07-29.18`, Stage 6 B.2/
+  B.3)* — wie oben, aber `CreateApplication(CUSTOM_AID_AES, true)`
+  erzwingt **immer** AES-Schlüssel, unabhängig vom PICC-Level-Cipher —
+  DESFire erlaubt das pro App. Macht `CUSTOM_AID_AES` zur aktiven
+  Test-App. Einziger Weg, den bisher nie an echter Hardware getesteten
+  AES-Authentifizierungs- und AES-ChangeKey-Pfad zu prüfen, ohne den
+  PICC-Master-Key selbst anzufassen. Beide Apps (2K3DES und AES) können
+  gleichzeitig auf der Karte existieren; welche gerade das Ziel der
+  übrigen Buttons ist, sieht man am `App <AID>`-Präfix im
+  Ergebnisfenster.
+- **APP LOESCHEN** — `DeleteApplication(activeCustomAid)`, muss laut
   DESFire-Vorgabe auf PICC-Ebene authentifiziert aufgerufen werden.
 - **GUTHABEN BUCHEN / NUTZEN** — `Credit`/`Debit` + `CommitTransaction`
-  auf der Test-App (ohne Commit werden Buchungen beim nächsten Kommando
-  verworfen), danach automatisch `GetValue` für den neuen Kontostand
-  (Nutzerwunsch) — Ergebnisfenster zeigt z. B. "App 654321: +100
-  gebucht, neuer Stand: 300" statt nur "gebucht". Bei "NUTZEN": die
+  auf der aktiven Test-App (ohne Commit werden Buchungen beim nächsten
+  Kommando verworfen), danach automatisch `GetValue` für den neuen
+  Kontostand (Nutzerwunsch) — Ergebnisfenster zeigt z. B. "App 123456:
+  +100 gebucht, neuer Stand: 300" statt nur "gebucht". Bei "NUTZEN": die
   **Karte selbst** lehnt ab, wenn das Guthaben dadurch unter
   `VALUE_LOWER_LIMIT` (0) fallen würde (Status meist `BOUNDARY_ERROR`) —
   keine eigene Guthaben-Prüfung nötig/implementiert.
-- **GUTHABEN ABFRAGEN** — `GetValue` auf der Test-App, Ergebnis in der
-  Zusammenfassungszeile.
+- **GUTHABEN ABFRAGEN** — `GetValue` auf der aktiven Test-App, Ergebnis in
+  der Zusammenfassungszeile.
 
 **Sicherheitshinweis ChangeKey (bitte lesen, bevor an einer echten Karte
 getestet wird):** Das Kryptogramm enthält eine CRC (CRC-A/CRC16 bei
@@ -991,19 +996,16 @@ Terminal-Firmware), nicht hierher:
   zusammenhängt (siehe Abschnitt 15).
 - Jegliche Geschäftslogik (Preise, Berechtigungen, Benutzerverwaltung).
 - **App-Auswahl: fest verdrahtete AID statt "aktive"/zuletzt gewählte
-  App.** Bis Version `2026-07-29.24` zeigte `activeCustomAid` in dieser
-  Test-Firmware bewusst auf die zuletzt per "APP ERSTELLEN"/"APP
-  ERSTELLEN (AES)" gewählte App (praktisch, um zwei parallele
-  Cipher-Testpfade zu halten -- siehe Abschnitt 15, Testsequenz-Funde
-  zur Verwechslungsgefahr genau dadurch). Seit `2026-07-29.25` gibt es
-  nur noch EINE Test-App mit fest verdrahteter `CUSTOM_AID` -- die
-  Indirektion wurde entfernt, die Test-Firmware entspricht in diesem
-  Punkt jetzt schon der fürs echte Terminal vorgesehenen Struktur: eine
-  einzige, fest im Code hinterlegte AID für Auf-/Abbuchen, unabhängig
-  davon, wie viele weitere Apps zufällig auf der Karte liegen -- und im
-  Idealfall sollte auf einer für dieses Terminal ausgegebenen Karte
-  ohnehin nur GENAU EINE Applikation existieren (Nutzervorgabe).
-  Vermeidet die Verwechslungsgefahr strukturell.
+  App.** In dieser Test-Firmware zeigt `activeCustomAid` bewusst
+  einfach auf die zuletzt per "APP ERSTELLEN"/"APP ERSTELLEN (AES)"
+  gewählte App (praktisch, um beide Cipher-Testpfade parallel zu halten
+  -- siehe Abschnitt 15, Testsequenz-Funde zur Verwechslungsgefahr genau
+  dadurch). Im echten Terminal soll das anders sein: eine einzige, fest
+  im Code hinterlegte AID für Auf-/Abbuchen, unabhängig davon, wie viele
+  weitere Apps zufällig auf der Karte liegen -- und im Idealfall sollte
+  auf einer für dieses Terminal ausgegebenen Karte ohnehin nur GENAU
+  EINE Applikation existieren (Nutzervorgabe). Vermeidet die
+  Verwechslungsgefahr strukturell, statt sie nur anzuzeigen wie hier.
 
 ## 15. Stage 6 — Robustheit, Randfälle und verbleibende Board-/Modul-Eigenheiten
 
@@ -1052,25 +1054,26 @@ Repositories. Geplanter Umfang, geordnet nach Priorität:
    TEST-SEQUENZ-Lauf (garantiert richtige Reihenfolge) hier sauber
    durchlief.
 
-**Neu: automatisierte TEST-SEQUENZ (Version `2026-07-29.19`, seit
-`2026-07-29.25` nur noch 9 statt 15 Schritte -- siehe "Entschieden:
-2K3DES-Test-App entfernt" unten).** Auf Nutzerwunsch, nachdem manuelles
-Testen in falscher Reihenfolge zu einem schwer einzuordnenden Log
-geführt hatte ("Idealerweise machst du mir einen Testbutton, der alles
-nacheinander testet, wie es gebraucht wird, mit Rückfragen Karte
-hin/Karte weg"): neuer Button "TEST-SEQUENZ (STAGE 6)" im
-EINSTELLUNGEN-Untermenü (auf dem Hauptbildschirm war kein Platz mehr
-für einen 10. Button) führt **9 Schritte automatisch nacheinander** aus
--- jeder Schritt eine eigene, ganz normale Kartenauflage (bewusst KEINE
-durchgehende RF-Sitzung über alle Schritte, sondern echtes
-Auflegen/Erkennen pro Schritt, entspricht realer Terminal-Nutzung):
+**Neu: automatisierte TEST-SEQUENZ (Version `2026-07-29.19`).** Auf
+Nutzerwunsch, nachdem manuelles Testen in falscher Reihenfolge zu einem
+schwer einzuordnenden Log geführt hatte ("Idealerweise machst du mir
+einen Testbutton, der alles nacheinander testet, wie es gebraucht wird,
+mit Rückfragen Karte hin/Karte weg"): neuer Button "TEST-SEQUENZ (STAGE
+6)" im EINSTELLUNGEN-Untermenü (auf dem Hauptbildschirm war kein Platz
+mehr für einen 10. Button) führt **15 Schritte automatisch
+nacheinander** aus -- jeder Schritt eine eigene, ganz normale
+Kartenauflage (bewusst KEINE durchgehende RF-Sitzung über alle Schritte,
+sondern echtes Auflegen/Erkennen pro Schritt, entspricht realer
+Terminal-Nutzung):
 
 1. KARTEN INFO (Ausgangszustand) → 2. AUF STANDARD → 3. APP ERSTELLEN
-(AES) → 4. MASTER-PW SETZEN → 5. GUTHABEN BUCHEN → 6. GUTHABEN NUTZEN →
-7. GUTHABEN ABFRAGEN (Kontrolle) → 8. AUF STANDARD → 9. KARTEN INFO
-(Endzustand).
+(2K3DES) → 4. MASTER-PW SETZEN → 5. GUTHABEN BUCHEN → 6. GUTHABEN NUTZEN
+→ 7. GUTHABEN ABFRAGEN (Kontrolle) → 8. AUF STANDARD → 9. APP ERSTELLEN
+(AES) → 10. MASTER-PW SETZEN (AES-ChangeKey) → 11. GUTHABEN BUCHEN →
+12. GUTHABEN NUTZEN → 13. GUTHABEN ABFRAGEN (Kontrolle) → 14. AUF
+STANDARD → 15. KARTEN INFO (Endzustand).
 
-Jeder Schritt zeigt "Schritt X/9:" im Fenstertitel, den Grund, warum er
+Jeder Schritt zeigt "Schritt X/15:" im Fenstertitel, den Grund, warum er
 in der Sequenz steckt, und danach wie gewohnt AUSFÜHREN → Karte auflegen
 → Ergebnis. Statt SCHLIESSEN zeigt das Ergebnisfenster **NÄCHSTER
 SCHRITT** (bzw. **TESTSEQUENZ FERTIG** beim letzten Schritt) und springt
@@ -1080,10 +1083,9 @@ hervorgehoben). Löschende Schritte (APP LOESCHEN) sind bewusst NICHT
 Teil der Sequenz -- Löschen bleibt ein separater, gezielter
 Tastendruck.
 
-**Erster kompletter Lauf (2026-07-29, 09:28 Uhr, damals noch 15
-Schritte mit zwei Apps): alle Schritte erfolgreich, EIN Fund danach
-beim manuellen Aufräumen.** Beide (damals noch zwei) Apps angelegt,
-beide Master-Keys gesetzt UND zurückgesetzt (2K3DES + AES),
+**Erster kompletter Lauf (2026-07-29, 09:28 Uhr): alle 15 Schritte
+erfolgreich, EIN Fund danach beim manuellen Aufräumen.** Beide Apps
+angelegt, beide Master-Keys gesetzt UND zurückgesetzt (2K3DES + AES),
 Guthaben-Zyklus auf beiden Apps sauber — bestätigt außerdem, dass die
 zwischenzeitlich befürchtete `APPLICATION_NOT_FOUND`-Anomalie (siehe
 Punkt 3 oben) tatsächlich nur an der vorher durcheinandergeratenen
@@ -1398,25 +1400,17 @@ ABBRECHEN im Wartezustand bricht die Verifikation weiterhin jederzeit ab.
 
 Noch nicht an echter Hardware getestet.
 
-### Entschieden: 2K3DES-Test-App entfernt, nur noch AES (Version `2026-07-29.25`)
+### Offene Frage: wird die 2K3DES-Test-App (`CUSTOM_AID`, 0x123456) noch gebraucht?
 
-Die oben aufgeworfene offene Frage ist entschieden -- Option (a): die
-2K3DES-Test-App (bisherige `CUSTOM_AID`, 0x123456) und ihr Button "APP
-ERSTELLEN (AES)" fallen komplett aus Firmware und TEST-SEQUENZ. Es gibt
-jetzt nur noch EINE Test-App (`CUSTOM_AID`, jetzt 0x654321, IMMER mit
-AES-Schlüsseln angelegt), der Button heißt schlicht "APP ERSTELLEN".
-Damit ist das Verwechslungsrisiko beim Löschen strukturell beseitigt
-(es gibt nur noch eine App, kein "welche ist gerade aktiv?" mehr) --
-die dafür extra eingebaute `activeCustomAid`-Indirektion samt der
-"Ziel: aktive Test-App"-Hinweiszeile (siehe Fix weiter oben) wurde
-ebenfalls entfernt, da sie genau dieses jetzt nicht mehr existierende
-Problem gelöst hatte. Die TEST-SEQUENZ schrumpft dadurch von 15 auf 9
-Schritte (nur noch ein Anlegen/ChangeKey/Credit/Debit/GetValue-Zyklus
-statt zwei).
-
-**Wichtig:** der 2K3DES-Codepfad selbst bleibt vollständig in
-`desfire.h` erhalten (`desfireAuthDefaultKey()`/`desfireAuthEitherKey()`
-probieren weiterhin zuerst 2K3DES) -- der wird nach wie vor gebraucht,
-um FREMDE Karten mit klassischem 2K3DES-Werksschlüssel lesen zu können
-(`desfireDeepRead()`/KARTEN INFO). Entfernt wurde ausschließlich der
-Pfad, der die EIGENE Test-App zwingend als 2K3DES anlegte.
+Vom Tester aufgeworfen, nachdem wiederholt Verwechslungen beim Löschen
+zwischen den beiden Test-Apps auftraten (siehe "Ziel: aktive Test-App"-
+Fix weiter oben). Jetzt, wo sowohl 2K3DES als auch AES vollständig
+bestätigt sind (Authentifizierung + ChangeKey + Credit/Debit, siehe
+Abschnitt B), bringt das gleichzeitige Vorhalten BEIDER Apps kaum noch
+zusätzlichen Testwert, aber definitiv zusätzliches Verwechslungsrisiko
+(welche App ist gerade aktiv?). Spricht außerdem für die in Abschnitt 14
+festgehaltene Terminal-Design-Vorgabe (nur eine App pro Karte). Noch
+nicht entschieden -- Optionen: (a) 2K3DES-App und ihren Button ganz aus
+Firmware/TEST-SEQUENZ entfernen, nur noch AES testen; (b) behalten für
+gelegentliche Cross-Cipher-Regressionstests, aber aus der TEST-SEQUENZ
+rausnehmen; (c) so lassen wie jetzt.
